@@ -7,3 +7,5 @@ Classes:
 
 the browsers are intended to be used with the line: %matplotlib widget
 however, they will work with %matplotlib notebook
+
+Optional: jupyter_launch_script.bat can be used to directly open jupyter notebooks from the windows file browser. right-click on an .ipynb file and set "open with" -> "choose another app" -> "jupyter_launch_script.bat"
