@@ -24,12 +24,8 @@ import traceback
 import subprocess
 import os
 import sys
-sys.path.append('K:/Labs205/labs/THz-STM/Software/spmpy')
-from spmpy_terry import spm
-import spmpy_terry as spmpy
-
-import importlib
-importlib.reload(spmpy)
+#sys.path.append('K:/Labs205/labs/THz-STM/Software/spmpy')
+from spmpy import Spm
 
 # Layouts
 def HBox(*pargs, **kwargs):
@@ -69,7 +65,7 @@ class imageBrowser():
     '''
     def __init__(self,figsize=(8,8),fontsize=12,cmap='Greys_r',home_directory='./'):
         self.img = None
-        self.figure,self.axes = plt.subplots(ncols=1,figsize=figsize) # simple default figure size
+        self.figure,self.axes = plt.subplots(ncols=1,figsize=figsize,num='sxm') # simple default figure size
         self.fontsize = fontsize
         self.cb = None
         self.image_data = np.zeros((64,64)) # 64 x 64 pixel zeros

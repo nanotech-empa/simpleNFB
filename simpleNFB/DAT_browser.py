@@ -28,12 +28,8 @@ from tkinter import filedialog
 
 import os
 import sys
-sys.path.append('K:/Labs205/labs/THz-STM/Software/spmpy')
-from spmpy_terry import spm
-import spmpy_terry as spmpy
-
-import importlib
-importlib.reload(spmpy)
+#sys.path.append('K:/Labs205/labs/THz-STM/Software/spmpy')
+from spmpy import Spm
 
 # Layouts
 def HBox(*pargs, **kwargs):
@@ -73,7 +69,7 @@ class spectrumBrowser():
     '''
     def __init__(self,figsize=(7,5),fontsize=12,cmap='Greys_r',home_directory='./',sxmBrowser=None):
         self.img = None
-        self.figure,self.axes = plt.subplots(ncols=1,figsize=figsize) # simple default figure size
+        self.figure,self.axes = plt.subplots(ncols=1,figsize=figsize,num='dat') # simple default figure size
         #self.wfFigure,self.wfAxes = plt.subplots(ncols=1,figsize=figsize)
         self.sxmBrowser = sxmBrowser
         if sxmBrowser == None:
