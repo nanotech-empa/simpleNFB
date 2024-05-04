@@ -25,10 +25,10 @@ import traceback
 import subprocess
 from tkinter import Tk
 from tkinter import filedialog
-
+from pathlib import Path
 import os
 import sys
-#sys.path.append('K:/Labs205/labs/THz-STM/Software/spmpy')
+sys.path.append(r'./spmpy')
 from spmpy import Spm
 
 # Layouts
@@ -83,11 +83,11 @@ class spectrumBrowser():
         self.errors = []
         self.spec_index = [0]
         self.axes.plot(self.spec_x[0],self.spec_data[0])
-        self.active_dir = home_directory
+        self.active_dir = Path(home_directory)
         self.sxm_files = []
         self.dat_files = []
         self.directories = [self.active_dir]
-        self.update_directories()
+        #self.update_directories()
 
         # widget layouts
         smallLayout = widgets.Layout(visibility='visible',width='80px')
@@ -96,7 +96,7 @@ class spectrumBrowser():
         extraLargeLayout = widgets.Layout(visibility='visible',width='200px')
         layout = lambda x: widgets.Layout(visibility='visible',width=f'{x}px')
         # selections
-        self.rootSelection = Btn_Widget('Open',disabled=True)
+        #self.rootSelection = Btn_Widget('Open',disabled=True)
         self.directorySelection = Selection_Widget(self.directories,'Folders:',rows=5)
         self.selectionList = widgets.SelectMultiple(options=self.dat_files,value=[],description='DAT Files:',rows=30)
         self.channelXSelect = widgets.Dropdown(options=['V'],value='V',description='X:',layout=extraLargeLayout)
@@ -147,7 +147,7 @@ class spectrumBrowser():
         self.h_selection_btn_layout = HBox(children=[self.refreshBtn,self.csvBtn,self.saveBtn,self.copyBtn,self.legendBtn])
         self.v_param_layout = VBox(children=[self.offset_value,self.windowParam,self.orderParam])
         self.v_channel_layout = VBox(children=[self.channelXSelect,self.channelYSelect])
-        self.v_file_select_layout = VBox(children=[self.rootSelection,self.directorySelection,self.selectionList,self.v_channel_layout])
+        self.v_file_select_layout = VBox(children=[self.directorySelection,self.selectionList,self.v_channel_layout])
         
         self.v_btn_layout = VBox(children=[self.h_selection_btn_layout,self.h_process_layout,self.cmapSelection])
         self.h_user_layout = HBox(children=[self.v_text_layout,self.v_btn_layout,self.v_param_layout])
@@ -156,7 +156,7 @@ class spectrumBrowser():
         self.h_main_layout = HBox(children=[self.v_file_select_layout,self.v_image_layout])
 
         # connect widgets to functions
-        self.rootSelection.on_click(self.open_project)
+        #self.rootSelection.on_click(self.open_project)
         self.saveBtn.on_click(self.save_figure)
         self.copyBtn.on_click(self.copy_figure)
         self.csvBtn.on_click(self.save_data)
@@ -187,33 +187,25 @@ class spectrumBrowser():
             plt.show(self.figure)
         #with self.wfFigure_display:
             #plt.show(self.wfFigure)
+        self.find_directories(self.active_dir)
+        self.update_directories()
     # show browser
     def display(self):
         display.display(self.h_main_layout)
-    # project selection
-    def open_project(self,a):
-        print('opening new project')
-        Tk().withdraw() # we don't want a full GUI, so keep the root window from appearing
-        self.active_dir = filedialog.askdirectory() # show an "Open" dialog box and return the path to the selected file
-        self.update_directories()
     
+    def find_directories(self,_path):
+        directories = []
+        for _directory in os.listdir(_path):
+            if os.path.isdir(_path / _directory):
+                if 'browser_outputs' in _directory or 'ipynb' in _directory: continue
+                directories.append(_path / _directory)
+                self.find_directories(_path / _directory)
+        else:
+            pass
+        self.directories.extend(directories)
+        return directories
     def update_directories(self):
-        for file in os.listdir(self.active_dir):
-            if os.path.isdir(os.path.join(self.active_dir,file)):
-                for f in os.listdir(f'{self.active_dir}/{file}'):
-                    if '.dat' in f:
-                        if file in self.directories: pass
-                        else: self.directories.append(file)
-                    if os.path.isdir(f):
-                        for _f in f:
-                            if '.dat' in _f:
-                                if f'{file}/{f}' in self.directories: pass
-                                else: self.directories.append(f'{file}/{f}')
-            if '.sxm' in file:
-                self.sxm_files.append(file)
-            elif '.dat' in file:
-                self.dat_files.append(file)
-        self.all_files = self.sxm_files + self.dat_files
+        self.directorySelection.options = self.directories
     # output functions
     def save_figure(self,a):
         self.saveBtn.icon = 'hourglass-start'
@@ -280,12 +272,12 @@ class spectrumBrowser():
             directory = os.path.join(self.active_dir,directory)
         if filename == None:
             files = [os.path.join(directory,self.dat_files[index]) for index in self.spec_index]
-            self.spec = [spm(f) for f in files]
+            self.spec = [Spm(f) for f in files]
             self.filenameText.value = ''.join([f'{self.all_files[self.spec_index[i]]},' for i in range(len(self.spec_index))])
             self.updateChannelSelection()
             self.update_image_data()
         else:
-            return spm(os.path.join(directory,filename))
+            return Spm(os.path.join(directory,filename))
         #self.updateErrorText('finish load new image')
     def smooth_data(self,data):
         if self.smoothBtn.value:
@@ -445,7 +437,7 @@ class spectrumBrowser():
                 ax.legend()
         else:
             pass
-        self.figure.tight_layout(pad=2)
+        #self.figure.tight_layout(pad=2)
         #self.updateErrorText('finish update axes')
 
 ### alternate functions
@@ -590,10 +582,11 @@ class spectrumBrowser():
         index=0
         if type(a) == type(self.refreshBtn): 
             index = self.selectionList.index
-        if self.directorySelection.value != self.active_dir:
-            directory = f'{self.active_dir}/{self.directorySelection.value}'
-        else:
-            directory = self.active_dir
+        directory = self.directorySelection.value
+        #if self.directorySelection.value != self.active_dir:
+        #    directory = f'{self.active_dir}/{self.directorySelection.value}'
+        #else:
+        #    directory = self.active_dir
         self.sxm_files = []
         self.dat_files = []
         for file in os.listdir(directory):

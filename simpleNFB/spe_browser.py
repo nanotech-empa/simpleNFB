@@ -11,7 +11,7 @@ import importlib
 import subprocess
 from pathlib import Path
 importlib.reload(spe_loader)
-#test
+
 class Spe_Browser():
     def __init__(self,standalone=True):
         self.figure, self.ax = plt.subplots(figsize=(7,6))

@@ -22,9 +22,10 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 import numpy as np
 import traceback
 import subprocess
+from pathlib import Path
 import os
 import sys
-#sys.path.append('K:/Labs205/labs/THz-STM/Software/spmpy')
+sys.path.append(r'./spmpy')
 from spmpy import Spm
 
 # Layouts
@@ -74,10 +75,11 @@ class imageBrowser():
         self.errors = []
         self.image_index = 0
 
-        self.active_dir = home_directory
+        self.active_dir = Path(home_directory)
         self.sxm_files = []
         self.dat_files = []
         self.directories = [self.active_dir]
+        '''
         for file in os.listdir(self.active_dir):
             if os.path.isdir(os.path.join(self.active_dir,file)):
                 for f in os.listdir(f'{self.active_dir}/{file}'):
@@ -96,6 +98,7 @@ class imageBrowser():
             elif '.dat' in file:
                 self.dat_files.append(file)
         self.all_files = self.sxm_files + self.dat_files
+        '''
         # widget layouts
         smallLayout = widgets.Layout(visibility='visible',width='80px')
         mediumLayout = widgets.Layout(visibility='visible',width='120px')
@@ -163,13 +166,27 @@ class imageBrowser():
         self.display()
         with self.figure_display:
             plt.show(self.figure)
+        self.find_directories(self.active_dir)
+        self.update_directories()
         #self.updateInfoText()
         #self.handler_file_selection('startup')
         #self.updateErrorText('finish startup')
     # show browser
     def display(self):
         display.display(self.mainlayout)
-
+    def find_directories(self,_path):
+        directories = []
+        for _directory in os.listdir(_path):
+            if os.path.isdir(_path / _directory):
+                if 'browser_outputs' in _directory or 'ipynb' in _directory: continue
+                directories.append(_path / _directory)
+                self.find_directories(_path / _directory)
+        else:
+            pass
+        self.directories.extend(directories)
+        return directories
+    def update_directories(self):
+        self.directorySelection.options = self.directories
     def copy_figure(self,a):
         self.save_figure(a)
         # Make powershell command
@@ -225,7 +242,7 @@ class imageBrowser():
         if directory != self.active_dir:
             directory = os.path.join(self.active_dir,directory)
         file = os.path.join(directory,self.sxm_files[self.image_index])
-        self.img = spm(file)
+        self.img = Spm(file)
         self.filenameText.value = self.all_files[self.image_index]
         self.updateChannelSelection()
         self.update_image_data()
@@ -375,11 +392,13 @@ class imageBrowser():
 ### Selection update
     def handler_folder_selection(self,a):
         index=0
-        if type(a) == type(self.refreshBtn): index = self.selectionList.index
-        if self.directorySelection.value != self.active_dir:
-            directory = f'{self.active_dir}/{self.directorySelection.value}'
-        else:
-            directory = self.active_dir
+        if type(a) == type(self.refreshBtn): 
+            index = self.selectionList.index
+        directory = self.directorySelection.value
+        #if self.directorySelection.value != self.active_dir:
+        #    directory = f'{self.active_dir}/{self.directorySelection.value}'
+        #else:
+        #    directory = self.active_dir
         self.sxm_files = []
         self.dat_files = []
         for file in os.listdir(directory):
