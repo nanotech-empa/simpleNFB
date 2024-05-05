@@ -37,9 +37,9 @@ class Spe_Browser():
             display.display(self.h_layout_main)
         with self.figure_display:
             plt.show(self.figure)
+
         self.find_directories(Path('./'))
         self.handler_update_directory(self.directories)
-
     def find_directories(self,_path):
         directories = []
         for _directory in os.listdir(_path):

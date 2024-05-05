@@ -84,12 +84,12 @@ Channels:
       unit: Hz
   LI Demod 1 X (A):
       nickname: dIdV
-      scaling: 1
-      unit: A
+      scaling: 1e12
+      unit: pS
   LI Demod 1 X (A) [bwd]:
       nickname: dIdV_bw
-      scaling: 1
-      unit: A
+      scaling: 1e12
+      unit: pS
   PMT (V):
       nickname: PMT
       scaling: 1
@@ -177,7 +177,7 @@ Channels:
   Intensity:
       nickname: Intensity
       scaling: 1
-      unit: ''
+      unit: 'Counts'
   LI Demod 0 X (V):
       nickname: EOS
       scaling: 1

@@ -59,15 +59,16 @@ def Selection_Widget(selection_list:list,label:str,rows=30):
 # Classes
 class spectrumBrowser():
     '''
-    example:
-        import sys
-        sys.path.append('K:\Labs205\Labs\THz-STM\Software\IPyWidgets')
-        import Custom_IPyWidgets as cwidgets
-        browser = cwidgets.imageBrowser(figsize=(width,height))
-        ## default figsize = (8,8), default fontsize = 12
-        ## default colormap = Greys_r
+    Info:
+        figure = specBrowser.figure
+        axes = specBrowser.axes
+        spec = specBrowser.spec --> list of spm objects selected in the browser
+
+        - specBrowser.update_axes() can be used to refresh the browser plot
+        - spec can be accessed for further analysis/processing
+        - axes can be accessed for futher plot modification (axis limits, labels, etc)
     '''
-    def __init__(self,figsize=(7,5),fontsize=12,cmap='Greys_r',home_directory='./',sxmBrowser=None):
+    def __init__(self,figsize=(8,8),fontsize=12,titlesize=12,cmap='Greys_r',home_directory='./',sxmBrowser=None):
         self.img = None
         self.figure,self.axes = plt.subplots(ncols=1,figsize=figsize,num='dat') # simple default figure size
         #self.wfFigure,self.wfAxes = plt.subplots(ncols=1,figsize=figsize)
@@ -75,6 +76,7 @@ class spectrumBrowser():
         if sxmBrowser == None:
             self.referenceLocBtn.disabled(True)
         self.fontsize = fontsize
+        self.titlesize = titlesize
         self.spec_x = [np.linspace(-2,2,64)]
         self.spec_data = [np.zeros(64)] # 64 x 64 pixel zeros
         self.spec_info = [{'x_unit':'N','y_unit':'a.u.','x_label':'Index'}]
@@ -99,8 +101,8 @@ class spectrumBrowser():
         #self.rootSelection = Btn_Widget('Open',disabled=True)
         self.directorySelection = Selection_Widget(self.directories,'Folders:',rows=5)
         self.selectionList = widgets.SelectMultiple(options=self.dat_files,value=[],description='DAT Files:',rows=30)
-        self.channelXSelect = widgets.Dropdown(options=['V'],value='V',description='X:',layout=extraLargeLayout)
-        self.channelYSelect = widgets.SelectMultiple(options=['I'],value=['I'],description='Y:',rows=3,layout=extraLargeLayout)
+        self.channelXSelect = widgets.Dropdown(options=['V'],value='V',description='X:')
+        self.channelYSelect = widgets.SelectMultiple(options=['I'],value=['I'],description='Y:',rows=3)
         #self.channelYSelect.add_class("left-spacing-class")
         #display(HTML("<style>.left-spacing-class {margin-left: 10px;}</style>"))
 
@@ -332,7 +334,7 @@ class spectrumBrowser():
         spec = self.spec[0]
         label = []
         experiment = experiments[0]
-        label.append(f'Experiment: {experiment}')
+        label.append(f'Experiment: {experiment} $\\rightarrow$ filename: {spec.name}')
         if len(self.selectionList.value) > 1:
             if self.smoothBtn.value:
                 label.append(f'Savitzky-Golay Filter $\\rightarrow$ Window: {self.windowParam.value}, Order: {self.orderParam.value}')
@@ -342,7 +344,6 @@ class spectrumBrowser():
             fb_enable = spec.get_param('Z-Ctrl hold')
             set_point = spec.get_param('setpoint_spec')
             bias = spec.get_param('V_spec')
-            #comment = spec.get_param('comment_spec')
             if np.abs(bias[0])<0.1:
                 bias = list(bias)
                 bias[0] = bias[0]*1000
@@ -354,9 +355,6 @@ class spectrumBrowser():
                 label.append('feedback off')
             label.append(f'Exposure Time (s): {int(spec.header["Spectrometer Exposure Time (ms)"])/1000}, $\lambda_c$: {spec.header["Spectrometer Selected Grating Center Wavelength (nm)"]}, grating: {spec.header["Spectrometer Selected Grating Density"]}')
             label.append('setpoint: I = %.0f%s, V = %.1f%s' % (set_point+bias))    
-            #label.append('comment: %s' % comment)
-            label.append(f'filename: {self.directorySelection.value}\{spec.name}')
-            label.append(f'Date: {spec.header["Saved Date"]}')
         if 'bias spectroscopy' in experiment:
             fb_enable = spec.get_param('Z-Ctrl hold')
             set_point = spec.get_param('setpoint_spec')
@@ -365,7 +363,6 @@ class spectrumBrowser():
             lockin_amplitude = float(spec.header['Lock-in>Amplitude'])*1e3
             lockin_phase= float(spec.header['Lock-in>Reference phase D1 (deg)'])
             lockin_frequency= float(spec.header['Lock-in>Frequency (Hz)'])
-            #comment = spec.get_param('comment_spec')
             if np.abs(bias[0])<0.1:
                 bias = list(bias)
                 bias[0] = bias[0]*1000
@@ -378,8 +375,6 @@ class spectrumBrowser():
             elif fb_enable == 'TRUE':
                 label.append('feedback off')
             label.append('setpoint: I = %.0f%s, V = %.1f%s' % (set_point+bias))    
-            #label.append('comment: %s' % comment)
-            label.append(f'filename: {self.directorySelection.value}\{spec.name} $\\rightarrow$ Date: {spec.header["Saved Date"]}')
         if 'THz amplitude sweep' in experiment:
             label.append(f'Laser Rep. Rate: {spec.header["Ext. VI 1>Laser>PP Frequency (MHz)"]}')
             label.append(f'Pulse Polarity: THz1;{spec.header["Ext. VI 1>THzPolarity>THz1"]}, THz2;{spec.header["Ext. VI 1>THzPolarity>THz2"]}')
@@ -388,16 +383,17 @@ class spectrumBrowser():
             label.append(f'Spec Points: {len(self.spec_data)}')
             label.append(f'Integration time (s): {spec.header["Integration time (s)"]}')
             label.append(f'z-sweep (m): {spec.header["Z sweep distance (m)"]}')
-            label.append(f'filename: {self.directorySelection.value}\{spec.name} $\\rightarrow$ Date: {spec.header["Saved Date"]}')
         if 'History Data' in experiment:
             label.append(f'Bias (V): {spec.header["Bias>Bias (V)"]}')
             label.append(f'Feedback: {spec.header["Z-Controller>Controller status"]}')
             label.append(f'Sample Period (ms): {spec.header["Sample Period (ms)"]}')
-            label.append(f'filename: {self.directorySelection.value}\{spec.name} $\\rightarrow$ Date: {spec.header["Saved Date"]}')
         else:
             pass
+        label.append(f'location: {self.directorySelection.value}')
+        label.append(f'Date: {spec.header["Saved Date"]}')
         if self.smoothBtn.value:
             label.append(f'Savitzky-Golay Filter $\\rightarrow$ Window: {self.windowParam.value}, Order: {self.orderParam.value}')
+        #label.append('comment: %s' % comment)
         self.spec_label = '\n'.join(label)
         #self.updateErrorText('finish update scan info')
     def update_axes(self):
@@ -427,7 +423,7 @@ class spectrumBrowser():
             ax.plot(self.spec_x[i],y_values,color=colors[i],label=self.labels[i])
         if self.specRefBtn.value and self.specRefSelect.value != None:
             ax.plot(rSpec_x,rSpec_data/np.max(rSpec_data)-1,color='grey',label='reference')
-        ax.set_title(self.spec_label,fontsize=self.fontsize,loc='left')
+        ax.set_title(self.spec_label,fontsize=self.titlesize,loc='left')
         ax.set_xlabel(f'{self.spec_info[0]["x_label"]} ({self.spec_info[0]["x_unit"]})',fontsize=self.fontsize)
         ax.set_ylabel(f'{self.channelYSelect.value[0]} ({self.spec_info[0]["y_unit"]})',fontsize=self.fontsize)
         if self.legendBtn.value:
@@ -437,7 +433,7 @@ class spectrumBrowser():
                 ax.legend()
         else:
             pass
-        #self.figure.tight_layout(pad=2)
+        self.figure.tight_layout(pad=2)
         #self.updateErrorText('finish update axes')
 
 ### alternate functions

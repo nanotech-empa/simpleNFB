@@ -56,18 +56,20 @@ def Selection_Widget(selection_list:list,label:str,rows=30):
 # Classes
 class imageBrowser():
     '''
-    example:
-        import sys
-        sys.path.append('K:\Labs205\Labs\THz-STM\Software\IPyWidgets')
-        import Custom_IPyWidgets as cwidgets
-        browser = cwidgets.imageBrowser(figsize=(width,height))
-        ## default figsize = (8,8), default fontsize = 12
-        ## default colormap = Greys_r
+    Info:
+        figure = imageBrowser.figure
+        axes = imageBrowser.axes
+        image_data = imageBrowser.image_data
+
+        - imageBrowser.update_axes() can be used to refresh the browser plot
+        - image_data can be accessed for further analysis/processing
+        - axes can be accessed for futher plot modification (axis limits, labels, etc)
     '''
-    def __init__(self,figsize=(8,8),fontsize=12,cmap='Greys_r',home_directory='./'):
+    def __init__(self,figsize=(8,8),fontsize=12,titlesize=12,cmap='Greys_r',home_directory='./'):
         self.img = None
         self.figure,self.axes = plt.subplots(ncols=1,figsize=figsize,num='sxm') # simple default figure size
         self.fontsize = fontsize
+        self.titlesize = titlesize
         self.cb = None
         self.image_data = np.zeros((64,64)) # 64 x 64 pixel zeros
         self.image_info = {'height':1,'width':1,'unit':'nm'}
@@ -267,7 +269,7 @@ class imageBrowser():
         if self.fixZeroBtn.value:
             self.image_data -= np.nanmin(self.image_data)
         if self.edgesBtn.value:
-            self.image_data = filters.sobel(self.image_data)
+            self.image_data = filters.laplace(self.image_data)
         # set vmin and vmax without triggers image update
         self.vmin.unobserve(self.updateDisplayImage,names='values')
         self.vmax.unobserve(self.updateDisplayImage,names='values')
@@ -308,13 +310,14 @@ class imageBrowser():
                 bias = tuple(bias)
             #label.append(f'channel: {self.channelSelect.value}')
             label.append(f'channel: {self.channelSelect.value} $\\rightarrow$ {mode}')
-            label.append(f'SP(I,V) = {set_point[0]:.0f}{set_point[1]}, {bias[0]:.2f}{bias[1]}')
+            label.append(f'setpoint: I = {set_point[0]:.0f}{set_point[1]}, V = {bias[0]:.2f}{bias[1]}')
             #label.append('I = %.0f%s' % set_point)  
             #label.append('bias = %.2f%s' % bias)
             #label.append('size: %.1f%s x %.1f%s (%.0f%s)' % (width+height+angle))
             #label.append('comment: %s' % comment)
-            label.append(f'filename: {self.directorySelection.value}\{self.img.name}') #dat files use header['Saved Date']
-            label.append(f'Date: {self.img.header["rec_date"]} $\\rightarrow$ {self.img.header["rec_time"]}')
+            label.append(f'location: {self.directorySelection.value}') #dat files use header['Saved Date']
+            label.append(f'filename: {self.img.name}')
+            label.append(f'Date: {self.img.header["rec_date"]} {self.img.header["rec_time"]}')
         #label.append('path: %s' % self.img.path)
         self.scan_info = '\n'.join(label)
         #self.updateErrorText('finish update scan info')
@@ -346,7 +349,7 @@ class imageBrowser():
             #self.cb.remove()
             self.cb.update_normal(axesImage)# = self.figure.colorbar(axesImage,ax=ax,shrink=0.75,pad=.01)
         self.cb.set_label(f'{self.channelSelect.value} ({self.image_info["unit"]})',fontsize=self.fontsize)
-        ax.set_title(self.scan_info,fontsize=self.fontsize,loc='left')
+        ax.set_title(self.scan_info,fontsize=self.titlesize,loc='left')
         ax.set_xlabel('x (nm)',fontsize=self.fontsize)
         ax.set_ylabel('y (nm)',fontsize=self.fontsize)
         ax.set_xticks([0,w])
