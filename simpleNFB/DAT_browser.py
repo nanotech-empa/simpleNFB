@@ -242,7 +242,7 @@ class spectrumBrowser():
         self.copyBtn.icon = 'clipboard'
     def save_data(self,a):
         self.saveBtn.icon = 'hourglass-start'
-        if os.path.exists(f'{self.active_dir}/browser_outputs'):
+        if os.path.exists(self.active_dir / 'browser_outputs'):
             pass
         else:
             os.mkdir(self.active_dir / 'browser_outputs')
@@ -377,6 +377,11 @@ class spectrumBrowser():
             elif fb_enable == 'TRUE':
                 label.append('feedback off')
             label.append('setpoint: I = %.0f%s, V = %.1f%s' % (set_point+bias))    
+        if 'THz pump-probe' in experiment:
+            label.append(f'Laser Rep. Rate: {spec.header["Ext. VI 1>Laser>PP Frequency (MHz)"]}')
+            label.append(f'Pulse Polarity: THz1;{spec.header["Ext. VI 1>THzPolarity>THz1"]}, THz2;{spec.header["Ext. VI 1>THzPolarity>THz2"]}')
+            # amplitudes
+            # dc setpoint
         if 'THz amplitude sweep' in experiment:
             label.append(f'Laser Rep. Rate: {spec.header["Ext. VI 1>Laser>PP Frequency (MHz)"]}')
             label.append(f'Pulse Polarity: THz1;{spec.header["Ext. VI 1>THzPolarity>THz1"]}, THz2;{spec.header["Ext. VI 1>THzPolarity>THz2"]}')
