@@ -211,20 +211,20 @@ class spectrumBrowser():
     # output functions
     def save_figure(self,a):
         self.saveBtn.icon = 'hourglass-start'
-        if os.path.exists(f'{self.active_dir}/browser_outputs'):
+        if os.path.exists(self.active_dir / 'browser_outputs'):
             pass
         else:
-            os.mkdir(f'{self.active_dir}/browser_outputs')
-        fname = f'{self.active_dir}/browser_outputs/{self.directorySelection.value}_{self.spec[0].name.split(".")[0]}_{self.channelYSelect.value[0]}'
+            os.mkdir(self.active_dir / 'browser_outputs')
+        fname = 'browser_outputs/' + str(self.directorySelection.value).split("\\")[-1] + f'_{self.spec[0].name.split(".")[0]}_{self.channelYSelect.value[0]}'
         if self.saveNote.value != '':
             fname += f'_{self.saveNote.value}'
-        if a.description == 'Waterfall':
-            self.wfFigure.savefig(f'{fname}_waterfall.png',dpi=500,format='png',transparent=True,bbox_inches='tight')
         else:
-            self.figure.savefig(f'{fname}.png',dpi=500,format='png',transparent=True,bbox_inches='tight')
-            self.last_save_fname = f'{fname}.png'
-            self.updateErrorText('Figure Saved')
-            self.saveNote.value = ''
+            pass
+        fname = self.active_dir / fname
+        self.figure.savefig(f'{fname}.png',dpi=500,format='png',transparent=True,bbox_inches='tight')
+        self.last_save_fname = f'{fname}.png'
+        self.updateErrorText('Figure Saved')
+        self.saveNote.value = ''
         self.saveBtn.icon = 'file-image-o'
     def copy_figure(self,a):
         self.save_figure(a)
@@ -240,14 +240,14 @@ class spectrumBrowser():
         self.copyBtn.icon = 'clipboard'
     def save_data(self,a):
         self.saveBtn.icon = 'hourglass-start'
-        if os.path.exists(f'{self.active_dir}/browser_outputs'):
+        if os.path.exists(self.active_dir / 'browser_outputs'):
             pass
         else:
-            os.mkdir(f'{self.active_dir}/browser_outputs')
-        fname = f'{self.active_dir}/browser_outputs/{self.directorySelection.value}_{self.spec[0].name.split(".")[0]}_{self.channelYSelect.value[0]}'
+            os.mkdir(self.active_dir / 'browser_outputs')
+        fname = 'browser_outputs/' + str(self.directorySelection.value).split("\\")[-1] + f'_{self.spec[0].name.split(".")[0]}_{self.channelYSelect.value[0]}'
         if self.saveNote.value != '':
             fname += f'_{self.saveNote.value}'
-
+        fname = self.active_dir / fname
         header = ""
         for label in self.labels:
             header += f"{self.spec_info[0]['x_label']} ({self.spec_info[0]['x_unit']}), {label[:-4]},"
@@ -375,6 +375,11 @@ class spectrumBrowser():
             elif fb_enable == 'TRUE':
                 label.append('feedback off')
             label.append('setpoint: I = %.0f%s, V = %.1f%s' % (set_point+bias))    
+        if 'THz pump-probe' in experiment:
+            label.append(f'Laser Rep. Rate: {spec.header["Ext. VI 1>Laser>PP Frequency (MHz)"]}')
+            label.append(f'Pulse Polarity: THz1;{spec.header["Ext. VI 1>THzPolarity>THz1"]}, THz2;{spec.header["Ext. VI 1>THzPolarity>THz2"]}')
+            # amplitudes
+            # dc setpoint
         if 'THz amplitude sweep' in experiment:
             label.append(f'Laser Rep. Rate: {spec.header["Ext. VI 1>Laser>PP Frequency (MHz)"]}')
             label.append(f'Pulse Polarity: THz1;{spec.header["Ext. VI 1>THzPolarity>THz1"]}, THz2;{spec.header["Ext. VI 1>THzPolarity>THz2"]}')

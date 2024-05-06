@@ -43,7 +43,7 @@ Channels:
       scaling: 1
       unit: V
   Bias calc (V):
-      nickname: V
+      nickname: V (calc)
       scaling: 1
       unit: V
   Bias [bwd] (V):
