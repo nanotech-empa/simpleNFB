@@ -203,13 +203,14 @@ class imageBrowser():
         self.copyBtn.icon = 'clipboard'
     def save_figure(self,a):
         self.saveBtn.icon = 'hourglass-start'
-        if os.path.exists(f'{self.active_dir}/browser_outputs'):
+        if os.path.exists(self.active_dir / 'browser_outputs'):
             pass
         else:
-            os.mkdir(f'{self.active_dir}/browser_outputs')
-        fname = f'{self.active_dir}/browser_outputs/{self.directorySelection.value}_{self.img.name.split(".")[0]}_{self.channelSelect.value}'
+            os.mkdir(self.active_dir / 'browser_outputs')
+        fname = 'browser_outputs/' + str(self.directorySelection.value).split("\\")[-1] + f'_{self.img.name.split(".")[0]}_{self.channelSelect.value}'
         if self.saveNote.value != '':
             fname += f'_{self.saveNote.value}'
+        fname = self.active_dir / fname
         self.last_save_fname = f'{fname}.png'
         self.figure.savefig(f'{fname}.png',dpi=500,format='png',transparent=True,bbox_inches='tight')
         self.updateErrorText('Figure Saved')
