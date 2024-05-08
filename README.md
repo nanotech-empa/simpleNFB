@@ -13,4 +13,4 @@ jupyter_launch_script.bat can be used to directly open jupyter notebooks from th
  1. right-click on an .ipynb file
  2. "open with"
  3. "choose another app"
- 4. "jupyter_launch_script.bat"
+ 4. "jupyter_launch_script.bat" (user or pc version depending on Anaconda installation)
