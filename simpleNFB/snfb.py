@@ -15,11 +15,13 @@ Classes:
 
 import SXM_browser
 import DAT_browser
-
+import _browser
 
 
 import importlib
 importlib.reload(SXM_browser)
 importlib.reload(DAT_browser)
+importlib.reload(_browser)
 sxmBrowser = SXM_browser.imageBrowser
 datBrowser = DAT_browser.spectrumBrowser
+Browser = _browser._Browser

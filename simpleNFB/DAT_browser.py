@@ -131,17 +131,17 @@ class spectrumBrowser():
         #self.figure_tabs.titles = ['Line Spectrum', 'Waterfall']
 
         # analyis
-        self.specRefBtn = widgets.ToggleButton(description='Reference',value=False,layout=mediumLayout)
-        self.specRefSelect = widgets.Dropdown(description='spec:',options=[None]+list(self.selectionList.options),value=None,layout=largeLayout)
+        self.specRefBtn = widgets.ToggleButton(description='Reference',value=False,layout=layout(120))
+        self.specRefSelect = widgets.Dropdown(description='spec:',options=[None]+list(self.selectionList.options),value=None,layout=layout(160))
         # offset options
         self.offsetBtn = widgets.ToggleButton(description='',value=False,layout=layout(30),icon='navicon',tooltip='Apply vertical offset')
-        self.offset_value = widgets.FloatText(value=0.1e-12,description='offset:',step=.1e-12,readout_format='.1e',layout=largeLayout)
+        self.offset_value = widgets.FloatText(value=0.1e-12,description='offset:',step=.1e-12,readout_format='.1e',layout=layout(160))
         # colormap
         self.cmapSelection = widgets.Dropdown(description='colormap:',options=plt.colormaps(),value=cmap,layout=layout(200))
         # smoothing options
         self.smoothBtn = widgets.ToggleButton(description='',value=False,layout=layout(30),icon='filter',tooltip='Apply savitzky-golay filter to plot data')
-        self.windowParam = widgets.BoundedIntText(description='window:',value=3,min=3,max=101,step=2,layout=largeLayout)
-        self.orderParam = widgets.BoundedIntText(description='order:',value=1,min=1,max=5,step=1,layout=largeLayout)
+        self.windowParam = widgets.BoundedIntText(description='window:',value=3,min=3,max=101,step=2,layout=layout(160))
+        self.orderParam = widgets.BoundedIntText(description='order:',value=1,min=1,max=5,step=1,layout=layout(160))
 
         # layouts
         self.v_text_layout = VBox(children=[self.saveNote,self.errorText])
