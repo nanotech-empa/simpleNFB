@@ -68,7 +68,7 @@ class spectrumBrowser():
         - spec can be accessed for further analysis/processing
         - axes can be accessed for futher plot modification (axis limits, labels, etc)
     '''
-    def __init__(self,figsize=(8,8),fontsize=12,titlesize=12,cmap='Greys_r',home_directory='./',sxmBrowser=None):
+    def __init__(self,figsize=(6,5),fontsize=12,titlesize=12,cmap='Greys_r',home_directory='./',sxmBrowser=None):
         self.img = None
         self.figure,self.axes = plt.subplots(ncols=1,figsize=figsize,num='dat') # simple default figure size
         #self.wfFigure,self.wfAxes = plt.subplots(ncols=1,figsize=figsize)
@@ -148,11 +148,11 @@ class spectrumBrowser():
         self.h_process_layout = HBox(children=[self.flattenBtn,self.fixZeroBtn,self.referenceLocBtn,self.plot2DBtn,self.offsetBtn,self.smoothBtn])
         self.h_selection_btn_layout = HBox(children=[self.refreshBtn,self.csvBtn,self.saveBtn,self.copyBtn,self.legendBtn])
         self.v_param_layout = VBox(children=[self.offset_value,self.windowParam,self.orderParam])
-        self.v_channel_layout = VBox(children=[self.channelXSelect,self.channelYSelect])
-        self.v_file_select_layout = VBox(children=[self.directorySelection,self.selectionList,self.v_channel_layout])
+        self.v_channel_layout = VBox(children=[self.channelXSelect,self.channelYSelect,self.saveNote])
+        self.v_file_select_layout = VBox(children=[self.directorySelection,self.selectionList])
         
         self.v_btn_layout = VBox(children=[self.h_selection_btn_layout,self.h_process_layout,self.cmapSelection])
-        self.h_user_layout = HBox(children=[self.v_text_layout,self.v_btn_layout,self.v_param_layout])
+        self.h_user_layout = HBox(children=[self.v_channel_layout,self.v_btn_layout,self.v_param_layout])
 
         self.v_image_layout = VBox(children=[self.figure_display,self.h_user_layout])
         self.h_main_layout = HBox(children=[self.v_file_select_layout,self.v_image_layout])
@@ -207,7 +207,9 @@ class spectrumBrowser():
         self.directories.extend(directories)
         return directories
     def update_directories(self):
-        self.directorySelection.options = self.directories
+        display_directories = ['\\'.join(str(directory).split('\\')[-1:]) for directory in self.directories]
+        display_directories[0] = f'(active){display_directories[0]}'
+        self.directorySelection.options = display_directories
     # output functions
     def save_figure(self,a):
         self.saveBtn.icon = 'hourglass-start'
@@ -269,7 +271,7 @@ class spectrumBrowser():
         self.updateDisplayImage()
     def load_new_image(self,filename=None):
         #self.updateErrorText('load new image')
-        directory = self.directorySelection.value
+        directory = self.directories[self.directorySelection.index]
         if directory != self.active_dir:
             directory = os.path.join(self.active_dir,directory)
         if filename == None:
@@ -389,7 +391,7 @@ class spectrumBrowser():
             label.append(f'Sample Period (ms): {spec.header["Sample Period (ms)"]}')
         else:
             pass
-        label.append(f'location: {self.directorySelection.value}')
+        label.append(f'location: {self.directories[self.directorySelection.index]}')
         label.append(f'Date: {spec.header["Saved Date"]}')
         if self.smoothBtn.value:
             label.append(f'Savitzky-Golay Filter $\\rightarrow$ Window: {self.windowParam.value}, Order: {self.orderParam.value}')
@@ -543,18 +545,19 @@ class spectrumBrowser():
         self.filenameText.value = self.dat_files[self.spec_index]
         self.selectionList.value = self.all_files[self.spec_index]
     def updateChannelSelection(self):
-        current_value_X = self.channelXSelect.value
-        current_value_Y = self.channelYSelect.value[0]
-        self.channelXSelect.options = self.spec[0].channels
-        self.channelYSelect.options = self.spec[0].channels
-        if current_value_X in self.spec[0].channels:
-            self.channelXSelect.value = current_value_X
-        else:
-            self.channelXSelect.value = self.spec[0].channels[0]
-        if current_value_Y in self.spec[0].channels:
-            self.channelYSelect.value = [current_value_Y]
-        else:
-            self.channelYSelect.value = [self.spec[0].channels[0]]
+        if len(self.spec) > 0:
+            current_value_X = self.channelXSelect.value
+            current_value_Y = self.channelYSelect.value[0]
+            self.channelXSelect.options = self.spec[0].channels
+            self.channelYSelect.options = self.spec[0].channels
+            if current_value_X in self.spec[0].channels:
+                self.channelXSelect.value = current_value_X
+            else:
+                self.channelXSelect.value = self.spec[0].channels[0]
+            if current_value_Y in self.spec[0].channels:
+                self.channelYSelect.value = [current_value_Y]
+            else:
+                self.channelYSelect.value = [self.spec[0].channels[0]]
         #self.updateErrorText(self.channelSelect.value)
     def updateErrorText(self,text):
         self.errors.append(f'{len(self.errors)} {text}')
@@ -578,7 +581,7 @@ class spectrumBrowser():
         index=0
         if type(a) == type(self.refreshBtn): 
             index = self.selectionList.index
-        directory = self.directorySelection.value
+        directory = self.directories[self.directorySelection.index]
         #if self.directorySelection.value != self.active_dir:
         #    directory = f'{self.active_dir}/{self.directorySelection.value}'
         #else:
@@ -593,27 +596,30 @@ class spectrumBrowser():
         self.all_files = self.sxm_files + self.dat_files
         self.selectionList.options = self.dat_files
         self.specRefSelect.options = [None]+list(self.dat_files)
-        if type(index) == int:
-            self.filenameText.value = self.dat_files[index]
-        else:
-            self.filenameText.value = self.dat_files[index[0]]
-        if self.filenameText.value in self.selectionList.options:
-            self.selectionList.value = [self.filenameText.value]
+        if len(self.dat_files) != 0:
+            if type(index) == int:
+                self.filenameText.value = self.dat_files[index]
+            else:
+                self.filenameText.value = self.dat_files[index[0]]
+            if self.filenameText.value in self.selectionList.options:
+                self.selectionList.value = [self.filenameText.value]
         #print(self.dat_files)
     def handler_file_selection(self,update:object):
         #self.updateErrorText(str(update))
         self.spec_index = [self.dat_files.index(value) for value in self.selectionList.value]#self.all_files.index(self.selectionList.value)
         try:
-            self.load_new_image()
-            self.updateDisplayImage()
+            if len(self.selectionList.value) > 0:
+                self.load_new_image()
+                self.updateDisplayImage()
         except Exception as err:
             self.updateErrorText('file selection error:' + str(err))
             print(traceback.format_exc())
     def handler_channel_selection(self,update):
         try:
             #channel_number = self.spec[0].channels.index(self.channelSelect.value[0])
-            self.update_image_data()
-            self.updateDisplayImage()
+            if len(self.spec) > 0:
+                self.update_image_data()
+                self.updateDisplayImage()
         except Exception as err:
             self.updateErrorText('channel selection error:' + str(err))
 ### data presentation update

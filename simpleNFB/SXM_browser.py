@@ -65,7 +65,7 @@ class imageBrowser():
         - image_data can be accessed for further analysis/processing
         - axes can be accessed for futher plot modification (axis limits, labels, etc)
     '''
-    def __init__(self,figsize=(8,8),fontsize=12,titlesize=12,cmap='Greys_r',home_directory='./'):
+    def __init__(self,figsize=(6,6),fontsize=12,titlesize=12,cmap='Greys_r',home_directory='./'):
         self.img = None
         self.figure,self.axes = plt.subplots(ncols=1,figsize=figsize,num='sxm') # simple default figure size
         self.fontsize = fontsize
@@ -81,26 +81,7 @@ class imageBrowser():
         self.sxm_files = []
         self.dat_files = []
         self.directories = [self.active_dir]
-        '''
-        for file in os.listdir(self.active_dir):
-            if os.path.isdir(os.path.join(self.active_dir,file)):
-                for f in os.listdir(f'{self.active_dir}/{file}'):
-                    if '.sxm' in f:
-                        if file in self.directories: 
-                            pass
-                        else: 
-                            self.directories.append(file)
-                    if os.path.isdir(f):
-                        for _f in f:
-                            if '.sxm' in _f:
-                                if f'{file}/{f}' in self.directories: pass
-                                else: self.directories.append(f'{file}/{f}')
-            if '.sxm' in file:
-                self.sxm_files.append(file)
-            elif '.dat' in file:
-                self.dat_files.append(file)
-        self.all_files = self.sxm_files + self.dat_files
-        '''
+
         # widget layouts
         smallLayout = widgets.Layout(visibility='visible',width='80px')
         mediumLayout = widgets.Layout(visibility='visible',width='120px')
@@ -110,13 +91,14 @@ class imageBrowser():
         # selections
         self.directorySelection = Selection_Widget(self.directories,'Folders:',rows=5)
         self.selectionList = Selection_Widget(self.sxm_files,'SXM Files:')
-        self.channelSelect = Selection_Widget(['z'],'Channels:',rows=5)
+        #self.channelSelect = Selection_Widget(['z'],'Channels:',rows=5)
+        self.channelSelect = widgets.Dropdown(description='Channels:',layout=layout(200))
         self.refreshBtn = Btn_Widget('',icon='refresh',tooltip='Reload file list',layout=layout(30))
         # text display
         self.filenameText = Text_Widget('')
         self.indexText = Text_Widget('0')
         self.errorText = Selection_Widget([],'Out:',rows=5)
-        self.saveNote = Text_Widget('',description='Note:',tooltip='This text is appended to filename when the figure is saved')
+        self.saveNote = Text_Widget('',description='Note:',tooltip='This text is appended to filename when the figure is saved',layout=layout(200))
         # image display
         self.nextBtn = Btn_Widget('',layout=layout(30),icon='arrow-circle-down',tooltip='Load next image in list')
         self.previousBtn = Btn_Widget('',layout=layout(30),icon='arrow-circle-up',tooltip='Load previous image in list')
@@ -137,14 +119,14 @@ class imageBrowser():
         # layouts
         self.h_selection_btn_layout = HBox(children=[self.refreshBtn,self.previousBtn,self.nextBtn,self.saveBtn,self.copyBtn])
         self.h_process_btn_layout = HBox(children=[self.fixZeroBtn,self.linebylineBtn,self.flattenBtn,self.edgesBtn,self.invertBtn])
-        self.v_text_layout = VBox(children=[self.saveNote,self.errorText])
+        self.v_text_layout = VBox(children=[self.channelSelect,self.saveNote])
         self.v_btn_layout = VBox(children=(self.h_selection_btn_layout,self.h_process_btn_layout))
         self.v_color_layout = VBox(children=(self.cmapSelection,self.vmin,self.vmax))
         self.h_user_layout = HBox(children=[self.v_text_layout,self.v_btn_layout,self.v_color_layout])
-        self.v_file_layout = VBox(children=[self.directorySelection,self.selectionList,self.channelSelect])
+        self.v_file_layout = VBox(children=[self.directorySelection,self.selectionList])
 
-        self.vlayout = VBox(children=[self.figure_display,self.h_user_layout])
-        self.mainlayout = HBox(children=[self.v_file_layout,self.vlayout])
+        self.v_image_layout = VBox(children=[self.figure_display,self.h_user_layout])
+        self.mainlayout = HBox(children=[self.v_file_layout,self.v_image_layout])
 
         # connect widgets to functions
         self.nextBtn.on_click(self.nextDisplay)
@@ -188,7 +170,9 @@ class imageBrowser():
         self.directories.extend(directories)
         return directories
     def update_directories(self):
-        self.directorySelection.options = self.directories
+        display_directories = ['\\'.join(str(directory).split('\\')[-1:]) for directory in self.directories]
+        display_directories[0] = f'(active){display_directories[0]}'
+        self.directorySelection.options = display_directories
     def copy_figure(self,a):
         self.save_figure(a)
         # Make powershell command
@@ -241,7 +225,7 @@ class imageBrowser():
         self.updateDisplayImage()
     def load_new_image(self):
         #self.updateErrorText('load new image')
-        directory = self.directorySelection.value
+        directory = self.directories[self.directorySelection.index]
         if directory != self.active_dir:
             directory = os.path.join(self.active_dir,directory)
         file = os.path.join(directory,self.sxm_files[self.image_index])
@@ -316,7 +300,7 @@ class imageBrowser():
             #label.append('bias = %.2f%s' % bias)
             #label.append('size: %.1f%s x %.1f%s (%.0f%s)' % (width+height+angle))
             #label.append('comment: %s' % comment)
-            label.append(f'location: {self.directorySelection.value}') #dat files use header['Saved Date']
+            label.append(f'location: {self.directories[self.directorySelection.index]}') #dat files use header['Saved Date']
             label.append(f'filename: {self.img.name}')
             label.append(f'Date: {self.img.header["rec_date"]} {self.img.header["rec_time"]}')
         #label.append('path: %s' % self.img.path)
@@ -398,7 +382,7 @@ class imageBrowser():
         index=0
         if type(a) == type(self.refreshBtn): 
             index = self.selectionList.index
-        directory = self.directorySelection.value
+        directory = self.directories[self.directorySelection.index]
         #if self.directorySelection.value != self.active_dir:
         #    directory = f'{self.active_dir}/{self.directorySelection.value}'
         #else:
@@ -412,9 +396,10 @@ class imageBrowser():
                 self.dat_files.append(file)
         self.all_files = self.sxm_files + self.dat_files
         self.selectionList.options = self.sxm_files
-        self.filenameText.value = self.sxm_files[index]
-        if self.filenameText.value in self.selectionList.options:
-            self.selectionList.value = self.filenameText.value
+        if len(self.sxm_files) != 0:
+            self.filenameText.value = self.sxm_files[index]
+            if self.filenameText.value in self.selectionList.options:
+                self.selectionList.value = self.filenameText.value
     def handler_file_selection(self,update):
         #self.updateErrorText(str(update))
         self.image_index = self.all_files.index(self.selectionList.value)
