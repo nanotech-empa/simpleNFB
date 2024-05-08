@@ -1,0 +1,1 @@
+%programdata%\Anaconda3\python.exe %programdata%\Anaconda3\cwp.py %programdata%\Anaconda3 %programdata%\Anaconda3\python.exe %programdata%\Anaconda3\Scripts\jupyter-notebook-script.py %1
