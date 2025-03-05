@@ -17,6 +17,7 @@ Classes:
 import ipywidgets as widgets
 from IPython import display
 from skimage import filters
+from scipy.ndimage import gaussian_filter
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import numpy as np
@@ -105,6 +106,7 @@ class imageBrowser():
         self.linebylineBtn = widgets.ToggleButton(description='',value=False,layout=layout(30),icon='align-justify',tooltip='Line by line linear subtraction')
         self.flattenBtn = widgets.ToggleButton(description='',value=False,layout=layout(30),icon='square-o',tooltip='Apply plane fit and subtraction')
         self.edgesBtn = widgets.ToggleButton(description='',value=False,layout=layout(30),icon='dot-circle-o',tooltip='Apply laplace filter (edge detection)')
+        self.gaussianBtn = widgets.ToggleButton(description='',value=False,layout=layout(30),icon='bullseye',tooltip='Apply a 3x3 Gaussian filter')
         self.invertBtn = widgets.ToggleButton(description='',value=False,layout=layout(30),icon='exchange',tooltip='Invert sign of the image data')
         self.fixZeroBtn = widgets.ToggleButton(description='',value=False,layout=layout(30),icon='neuter',tooltip='Rescale the image data so the minimum value is zero')
         self.saveBtn = Btn_Widget('',layout=layout(30),icon='file-image-o',tooltip='Save displayed image to \\browser_output folder\nText in the "note" is appended to figure filename')
@@ -118,7 +120,7 @@ class imageBrowser():
 
         # layouts
         self.h_selection_btn_layout = HBox(children=[self.refreshBtn,self.previousBtn,self.nextBtn,self.saveBtn,self.copyBtn])
-        self.h_process_btn_layout = HBox(children=[self.fixZeroBtn,self.linebylineBtn,self.flattenBtn,self.edgesBtn,self.invertBtn])
+        self.h_process_btn_layout = HBox(children=[self.fixZeroBtn,self.linebylineBtn,self.flattenBtn,self.edgesBtn,self.gaussianBtn,self.invertBtn])
         self.v_text_layout = VBox(children=[self.channelSelect,self.saveNote])
         self.v_btn_layout = VBox(children=(self.h_selection_btn_layout,self.h_process_btn_layout))
         self.v_color_layout = VBox(children=(self.cmapSelection,self.vmin,self.vmax))
@@ -138,6 +140,7 @@ class imageBrowser():
         self.invertBtn.observe(self.redraw_image,names='value')
         self.fixZeroBtn.observe(self.redraw_image,names='value')
         self.edgesBtn.observe(self.redraw_image,names='value')
+        self.gaussianBtn.observe(self.redraw_image,names='value')
         self.directorySelection.observe(self.handler_folder_selection,names=['value'])
         self.selectionList.observe(self.handler_file_selection,names=['value'])
         self.channelSelect.observe(self.handler_channel_selection,names=['value'])
@@ -161,8 +164,9 @@ class imageBrowser():
     def find_directories(self,_path):
         directories = []
         for _directory in os.listdir(_path):
-            if os.path.isdir(_path / _directory):
-                if 'browser_outputs' in _directory or 'ipynb' in _directory: continue
+            if _directory[-4:] in ['.dat','.sxm']: continue
+            elif os.path.isdir(_path / _directory):
+                if 'browser_outputs' in _directory or 'ipynb' in _directory or 'raw_stml_data' in _directory: continue
                 directories.append(_path / _directory)
                 self.find_directories(_path / _directory)
         else:
@@ -252,9 +256,12 @@ class imageBrowser():
         if self.linebylineBtn.value:
             self.remove_line_average()
         if self.fixZeroBtn.value:
-            self.image_data -= np.nanmin(self.image_data)
+            self.image_data -= np.nanmin(self.image_data)        
+        if self.gaussianBtn.value:
+            self.image_data = gaussian_filter(self.image_data,2)
         if self.edgesBtn.value:
             self.image_data = filters.laplace(self.image_data)
+
         # set vmin and vmax without triggers image update
         self.vmin.unobserve(self.updateDisplayImage,names='values')
         self.vmax.unobserve(self.updateDisplayImage,names='values')
@@ -347,6 +354,7 @@ class imageBrowser():
         #self.updateErrorText('update display image')
         self.update_axes()
         #self.figure.canvas.set_window_title(self.img.name.split('.')[0])
+        self.figure.tight_layout(pad=1)
         self.figure.canvas.draw()
         #self.updateErrorText('finish update display image')
     def updateInfoText(self):

@@ -14,7 +14,7 @@ importlib.reload(spe_loader)
 
 class Spe_Browser():
     def __init__(self,standalone=True):
-        self.figure, self.ax = plt.subplots(figsize=(7,6))
+        self.figure, self.ax = plt.subplots(figsize=(7,6),num='spe')
         self.ax2 = self.ax.twiny()
         self.ax2.set_navigate(False)
         self.ax2.set_xlabel('Photon Energy (eV)')

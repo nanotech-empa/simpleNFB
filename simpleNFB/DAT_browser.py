@@ -85,6 +85,8 @@ class spectrumBrowser():
         self.errors = []
         self.spec_index = [0]
         self.axes.plot(self.spec_x[0],self.spec_data[0])
+        self.default_channel = {'STML':['Wavelength', 'Intensity'],'bias spectroscopy':['V','dIdV'],'Z spectroscopy':['zspec','I']}
+        self.loaded_experiments = None
         self.active_dir = Path(home_directory)
         self.sxm_files = []
         self.dat_files = []
@@ -101,8 +103,16 @@ class spectrumBrowser():
         #self.rootSelection = Btn_Widget('Open',disabled=True)
         self.directorySelection = Selection_Widget(self.directories,'Folders:',rows=5)
         self.selectionList = widgets.SelectMultiple(options=self.dat_files,value=[],description='DAT Files:',rows=30)
-        self.channelXSelect = widgets.Dropdown(options=['V'],value='V',description='X:')
-        self.channelYSelect = widgets.SelectMultiple(options=['I'],value=['I'],description='Y:',rows=3)
+        self.filterSelection = widgets.SelectMultiple(options=['all','dIdV','Z-Spectroscopy','stml'],value=['all'],description='Filter',rows=3)
+        self.newFilterText = widgets.Text(description='New Filter',tooltip='user defined string to use for file filtering',layout=layout(200))
+        self.addFilterBtn = widgets.Button(description='+',tooltip='click to add new filter to selection',layout=layout(30))
+    
+        self.channelXSelect = widgets.Dropdown(options=[None],value=None,description='X:')
+        self.channelYSelect = widgets.SelectMultiple(options=[None],value=[None],description='Y:',rows=3)
+
+        #self.channelXSelect = widgets.Dropdown(options=['V'],value='V',description='X:')
+        #self.channelYSelect = widgets.SelectMultiple(options=['I'],value=['I'],description='Y:',rows=3)
+        
         #self.channelYSelect.add_class("left-spacing-class")
         #display(HTML("<style>.left-spacing-class {margin-left: 10px;}</style>"))
 
@@ -144,12 +154,14 @@ class spectrumBrowser():
         self.orderParam = widgets.BoundedIntText(description='order:',value=1,min=1,max=5,step=1,layout=largeLayout)
 
         # layouts
+        self.h_new_filter_layout = HBox(children=[self.newFilterText,self.addFilterBtn])
+        self.v_filter_layout = VBox(children=[self.filterSelection,self.h_new_filter_layout])
         self.v_text_layout = VBox(children=[self.saveNote,self.errorText])
         self.h_process_layout = HBox(children=[self.flattenBtn,self.fixZeroBtn,self.referenceLocBtn,self.plot2DBtn,self.offsetBtn,self.smoothBtn])
         self.h_selection_btn_layout = HBox(children=[self.refreshBtn,self.csvBtn,self.saveBtn,self.copyBtn,self.legendBtn])
         self.v_param_layout = VBox(children=[self.offset_value,self.windowParam,self.orderParam])
         self.v_channel_layout = VBox(children=[self.channelXSelect,self.channelYSelect,self.saveNote])
-        self.v_file_select_layout = VBox(children=[self.directorySelection,self.selectionList])
+        self.v_file_select_layout = VBox(children=[self.directorySelection,self.selectionList,self.v_filter_layout])
         
         self.v_btn_layout = VBox(children=[self.h_selection_btn_layout,self.h_process_layout,self.cmapSelection])
         self.h_user_layout = HBox(children=[self.v_channel_layout,self.v_btn_layout,self.v_param_layout])
@@ -172,6 +184,8 @@ class spectrumBrowser():
 
         self.directorySelection.observe(self.handler_folder_selection,names=['value'])
         self.selectionList.observe(self.handler_file_selection,names=['value'])
+        self.filterSelection.observe(self.handler_folder_selection,names='value')
+        self.addFilterBtn.on_click(self.handler_update_filters)
         self.channelXSelect.observe(self.handler_channel_selection,names='value')
         self.channelYSelect.observe(self.handler_channel_selection,names=['value'])
 
@@ -198,8 +212,9 @@ class spectrumBrowser():
     def find_directories(self,_path):
         directories = []
         for _directory in os.listdir(_path):
-            if os.path.isdir(_path / _directory):
-                if 'browser_outputs' in _directory or 'ipynb' in _directory: continue
+            if _directory[-4:] in ['.dat','.sxm']: continue
+            elif os.path.isdir(_path / _directory):
+                if 'browser_outputs' in _directory or 'ipynb' in _directory or 'spmpy' in _directory or '__pycache__' in _directory or 'raw_stml_data' in _directory: continue
                 directories.append(_path / _directory)
                 self.find_directories(_path / _directory)
         else:
@@ -278,10 +293,12 @@ class spectrumBrowser():
             files = [os.path.join(directory,self.dat_files[index]) for index in self.spec_index]
             self.spec = [Spm(f) for f in files]
             self.filenameText.value = ''.join([f'{self.all_files[self.spec_index[i]]},' for i in range(len(self.spec_index))])
+            self.loaded_experiments = [spec.header['Experiment'] for spec in self.spec]
             self.updateChannelSelection()
             self.update_image_data()
         else:
             return Spm(os.path.join(directory,filename))
+
         #self.updateErrorText('finish load new image')
     def smooth_data(self,data):
         if self.smoothBtn.value:
@@ -331,17 +348,19 @@ class spectrumBrowser():
         #self.updateErrorText('finish update image data')
     def update_scan_info(self):
         #self.updateErrorText('update scan info')
-        experiments = [spec.header['Experiment'] for spec in self.spec]
+        experiments = self.loaded_experiments#[spec.header['Experiment'] for spec in self.spec]
         assert experiments.count(experiments[0]) == len(experiments), 'Please ensure all selections are the same measurement type'
         spec = self.spec[0]
         label = []
         experiment = experiments[0]
         label.append(f'Experiment: {experiment} $\\rightarrow$ filename: {spec.name}')
+        '''
         if len(self.selectionList.value) > 1:
             if self.smoothBtn.value:
                 label.append(f'Savitzky-Golay Filter $\\rightarrow$ Window: {self.windowParam.value}, Order: {self.orderParam.value}')
             self.spec_label = '\n'.join(label)
             return
+            '''
         if 'STML' in experiment:
             fb_enable = spec.get_param('Z-Ctrl hold')
             set_point = spec.get_param('setpoint_spec')
@@ -355,7 +374,7 @@ class spectrumBrowser():
                 label.append('feedback on')
             elif fb_enable == 'TRUE':
                 label.append('feedback off')
-            label.append(f'Exposure Time (s): {int(spec.header["Spectrometer Exposure Time (ms)"])/1000}, $\lambda_c$: {spec.header["Spectrometer Selected Grating Center Wavelength (nm)"]}, grating: {spec.header["Spectrometer Selected Grating Density"]}')
+            label.append(f'Exposure Time (s): {float(spec.header["Exposure Time [ms]"])/1000:.0f}, $\lambda_c$: {spec.header["Center Wavelength [nm]"]}, grating: {spec.header["Selected Grating"]}')
             label.append('setpoint: I = %.0f%s, V = %.1f%s' % (set_point+bias))    
         if 'bias spectroscopy' in experiment:
             fb_enable = spec.get_param('Z-Ctrl hold')
@@ -392,7 +411,12 @@ class spectrumBrowser():
         else:
             pass
         label.append(f'location: {self.directories[self.directorySelection.index]}')
-        label.append(f'Date: {spec.header["Saved Date"]}')
+        if len(self.spec) > 1:
+            d1 = self.spec[0].header["Saved Date"]
+            d2 = self.spec[-1].header["Saved Date"]
+            label.append(f'Date: {d1} $\\rightarrow$ {d2}')
+        else:
+            label.append(f'Date: {spec.header["Saved Date"]}')
         if self.smoothBtn.value:
             label.append(f'Savitzky-Golay Filter $\\rightarrow$ Window: {self.windowParam.value}, Order: {self.orderParam.value}')
         #label.append('comment: %s' % comment)
@@ -546,16 +570,24 @@ class spectrumBrowser():
         self.selectionList.value = self.all_files[self.spec_index]
     def updateChannelSelection(self):
         if len(self.spec) > 0:
+            default_channels = [None,None]
+            if self.loaded_experiments[0] in self.default_channel.keys():
+                default_channels = self.default_channel[self.loaded_experiments[0]]
+            #print(default_channels)
             current_value_X = self.channelXSelect.value
             current_value_Y = self.channelYSelect.value[0]
             self.channelXSelect.options = self.spec[0].channels
             self.channelYSelect.options = self.spec[0].channels
             if current_value_X in self.spec[0].channels:
                 self.channelXSelect.value = current_value_X
+            elif default_channels[0] != None:
+                self.channelXSelect.value = default_channels[0]
             else:
                 self.channelXSelect.value = self.spec[0].channels[0]
             if current_value_Y in self.spec[0].channels:
                 self.channelYSelect.value = [current_value_Y]
+            elif default_channels[1] != None:
+                self.channelYSelect.value = [default_channels[1]]
             else:
                 self.channelYSelect.value = [self.spec[0].channels[0]]
         #self.updateErrorText(self.channelSelect.value)
@@ -592,7 +624,8 @@ class spectrumBrowser():
             if '.sxm' in file:
                 self.sxm_files.append(file)
             elif '.dat' in file:
-                self.dat_files.append(file)
+                if 'all' in self.filterSelection.value or any(filt in file for filt in self.filterSelection.value):
+                    self.dat_files.append(file)
         self.all_files = self.sxm_files + self.dat_files
         self.selectionList.options = self.dat_files
         self.specRefSelect.options = [None]+list(self.dat_files)
@@ -622,6 +655,12 @@ class spectrumBrowser():
                 self.updateDisplayImage()
         except Exception as err:
             self.updateErrorText('channel selection error:' + str(err))
+    def handler_update_filters(self,update):
+        if self.newFilterText.value != '' and self.newFilterText.value not in self.filterSelection.options:
+            options = list(self.filterSelection.options)
+            options.append(self.newFilterText.value)
+            self.filterSelection.options = options
+            self.newFilterText.value = ''
 ### data presentation update
     def handler_update_axes(self,a):
         self.update_scan_info()
