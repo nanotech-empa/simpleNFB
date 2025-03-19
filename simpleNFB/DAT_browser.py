@@ -85,7 +85,7 @@ class spectrumBrowser():
         self.errors = []
         self.spec_index = [0]
         self.axes.plot(self.spec_x[0],self.spec_data[0])
-        self.default_channel = {'STML':['Wavelength', 'Intensity'],'bias spectroscopy':['V','dIdV'],'Z spectroscopy':['zspec','I']}
+        self.default_channel = {'STML':['Wavelength', 'Intensity'],'bias spectroscopy':['V','dIdV'],'Z spectroscopy':['zrel','I']}
         self.loaded_experiments = None
         self.active_dir = Path(home_directory)
         self.sxm_files = []
