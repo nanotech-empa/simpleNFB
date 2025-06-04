@@ -99,6 +99,7 @@ class spectrumBrowser():
         largeLayout = widgets.Layout(visibility='visible',width='160px')
         extraLargeLayout = widgets.Layout(visibility='visible',width='200px')
         layout = lambda x: widgets.Layout(visibility='visible',width=f'{x}px')
+        layout_h = lambda x: widgets.Layout(visibility='hidden',width=f'{x}px')
         # selections
         #self.rootSelection = Btn_Widget('Open',disabled=True)
         self.directorySelection = Selection_Widget(self.directories,'Folders:',rows=5)
@@ -152,13 +153,40 @@ class spectrumBrowser():
         self.smoothBtn = widgets.ToggleButton(description='',value=False,layout=layout(30),icon='filter',tooltip='Apply savitzky-golay filter to plot data')
         self.windowParam = widgets.BoundedIntText(description='window:',value=3,min=3,max=101,step=2,layout=largeLayout)
         self.orderParam = widgets.BoundedIntText(description='order:',value=1,min=1,max=5,step=1,layout=largeLayout)
+        # settings menu toggle
+        self.settingsBtn = widgets.ToggleButton(description='',icon='gear',value=False,tooltip='Display figure title options panel',layout=layout(30))
+        # figure title options
+        self.titleLabel = widgets.Label(value='Figure Title Settings',layout=layout_h(150))
+        self.titleToggle = widgets.ToggleButton(value=True, description='Show Title',tooltip='Toggle figure title',layout=layout_h(150))
+        self.setpointToggle = widgets.ToggleButton(value=True,description='Setpoint',layout=layout_h(150))
+        self.feedbackToggle = widgets.ToggleButton(value=True,description='Feedback',layout=layout_h(150))
+        self.locationToggle = widgets.ToggleButton(value=True,description='file location',layout=layout_h(150))
+        self.depthSelection = widgets.Dropdown(value='full',options=['full',1,2,3,4,5],description='Depth:',tooltip='folder depth to display in location section of the image title',layout=layout_h(150))
+        self.nameToggle = widgets.ToggleButton(value=True,description='Filename',layout=layout_h(150))
+        self.dateToggle = widgets.ToggleButton(value=True,description='Date',layout=layout_h(150))
+        # legend settings
+        self.legendLabel = widgets.Label(value='Legend Settings',layout=layout_h(150))
+        self.legendText = widgets.Select(value='',options=[''],rows=3,layout=layout_h(150))
+        # The above code is accessing the `legendEntry` attribute of the `self` object in Python.
+        self.legendEntry = widgets.Text(description='',tooltip='enter new legend text here',layout=layout_h(150))
+        self.legendToggle = widgets.ToggleButton(value=True,description='legend',layout=layout_h(74))
+        self.legendUpdate = widgets.Button(description='Update',tooltip='Press to update selected legend entry with new text',layout=layout_h(74))
+        # data filter settings
+        self.filterLabel = widgets.Label(value='Data Filter Settings',layout=layout_h(150))
+        self.offsetToggle = widgets.ToggleButton(value=False,description='Offset',tooltip='Apply a vertical offset to each line in dataset',layout=layout_h(150))
+        self.offsetSize = widgets.FloatText(value=0.1e-12,description='amount:',step=.1e-12,readout_format='.1e',layout=layout_h(150))
+        self.svgToggle = widgets.ToggleButton(value=False,description='Savitsky-Golay',layout=layout_h(150))
+        self.svgSize = widgets.BoundedIntText(description='window:',value=3,min=3,max=101,step=2,layout=layout_h(150))
+        self.svgOrder = widgets.BoundedIntText(description='order:',value=1,min=1,max=5,step=1,layout=layout_h(150))
+        self.thresholdToggle = widgets.ToggleButton(value=False,description='Threshold',tooltip='enable to cut out values above threshold value',layout=layout_h(150))
+        self.thresholdValue = widgets.FloatText(value=100,description='value:',layout=layout_h(150))
 
         # layouts
         self.h_new_filter_layout = HBox(children=[self.newFilterText,self.addFilterBtn])
         self.v_filter_layout = VBox(children=[self.filterSelection,self.h_new_filter_layout])
         self.v_text_layout = VBox(children=[self.saveNote,self.errorText])
-        self.h_process_layout = HBox(children=[self.flattenBtn,self.fixZeroBtn,self.referenceLocBtn,self.plot2DBtn,self.offsetBtn,self.smoothBtn])
-        self.h_selection_btn_layout = HBox(children=[self.refreshBtn,self.csvBtn,self.saveBtn,self.copyBtn,self.legendBtn])
+        self.h_process_layout = HBox(children=[self.flattenBtn,self.fixZeroBtn,self.referenceLocBtn,self.plot2DBtn])
+        self.h_selection_btn_layout = HBox(children=[self.refreshBtn,self.csvBtn,self.saveBtn,self.copyBtn,self.settingsBtn])
         self.v_param_layout = VBox(children=[self.offset_value,self.windowParam,self.orderParam])
         self.v_channel_layout = VBox(children=[self.channelXSelect,self.channelYSelect,self.saveNote])
         self.v_file_select_layout = VBox(children=[self.directorySelection,self.selectionList,self.v_filter_layout])
@@ -166,10 +194,40 @@ class spectrumBrowser():
         self.v_btn_layout = VBox(children=[self.h_selection_btn_layout,self.h_process_layout,self.cmapSelection])
         self.h_user_layout = HBox(children=[self.v_channel_layout,self.v_btn_layout,self.v_param_layout])
 
+        self.v_settings_layout = VBox(children=[self.legendLabel,
+                                                self.legendText,
+                                                self.legendEntry,
+                                                HBox(children=[self.legendToggle,self.legendUpdate],layout=layout_h(150)),
+                                                self.titleLabel,
+                                                    self.titleToggle,
+                                                    self.nameToggle,
+                                                    self.setpointToggle,
+                                                    self.feedbackToggle,
+                                                    self.locationToggle,
+                                                    self.depthSelection,
+                                                    self.dateToggle,
+                                                    self.filterLabel,
+                                                    self.offsetToggle,
+                                                    self.offsetSize,
+                                                    self.svgToggle,
+                                                    self.svgSize,
+                                                    self.svgOrder,
+                                                    self.thresholdToggle,
+                                                    self.thresholdValue],
+                                                    layout=layout_h(180))
+
         self.v_image_layout = VBox(children=[self.figure_display,self.h_user_layout])
-        self.h_main_layout = HBox(children=[self.v_file_select_layout,self.v_image_layout])
+        self.h_main_layout = HBox(children=[self.v_file_select_layout,self.v_image_layout,self.v_settings_layout])
 
         # connect widgets to functions
+        for child in self.v_settings_layout.children:
+            if type(child) == type(self.v_settings_layout):
+                for ch in child.children:
+                    ch.observe(self.handler_settingsChange,names='value')
+            child.observe(self.handler_settingsChange,names='value')
+        self.legendUpdate.on_click(self.update_legend_entry)
+        self.legendText.observe(self.update_legend_settings,names=['value'])
+        self.settingsBtn.observe(self.handler_settingsDisplay,names='value')
         #self.rootSelection.on_click(self.open_project)
         self.saveBtn.on_click(self.save_figure)
         self.copyBtn.on_click(self.copy_figure)
@@ -301,12 +359,9 @@ class spectrumBrowser():
 
         #self.updateErrorText('finish load new image')
     def smooth_data(self,data):
-        if self.smoothBtn.value:
-            window = self.windowParam.value
-            order = self.orderParam.value
+            window = self.svgSize.value
+            order = self.svgOrder.value
             return savgol_filter(data,window,order)
-        else:
-            return data
     def changeReferenceSelection(self,a):
         if self.specRefBtn.value == True:
             self.handler_update_axes(a)
@@ -353,16 +408,12 @@ class spectrumBrowser():
         spec = self.spec[0]
         label = []
         experiment = experiments[0]
-        label.append(f'Experiment: {experiment} $\\rightarrow$ filename: {spec.name}')
-        '''
-        if len(self.selectionList.value) > 1:
-            if self.smoothBtn.value:
-                label.append(f'Savitzky-Golay Filter $\\rightarrow$ Window: {self.windowParam.value}, Order: {self.orderParam.value}')
-            self.spec_label = '\n'.join(label)
-            return
-            '''
+        experiment_str = f'Experiment: {experiment} $\\rightarrow$ filename: {spec.name}'
+        feedback_str = ''
+        if self.nameToggle.value:
+            label.append(experiment_str)
         if 'STML' in experiment:
-            fb_enable = spec.get_param('Z-Ctrl hold')
+            fb_enable = spec.header['Z-Controller>Controller status']
             set_point = spec.get_param('setpoint_spec')
             bias = spec.get_param('V_spec')
             if np.abs(bias[0])<0.1:
@@ -370,12 +421,12 @@ class spectrumBrowser():
                 bias[0] = bias[0]*1000
                 bias[1] = 'mV'
                 bias = tuple(bias)
-            if fb_enable == 'FALSE':
-                label.append('feedback on')
-            elif fb_enable == 'TRUE':
-                label.append('feedback off')
+            if fb_enable == 'ON':
+                feedback_str = 'feedback on'
+            elif fb_enable == 'OFF':
+                feedback_str = 'feedback off'
             label.append(f'Exposure Time (s): {float(spec.header["Exposure Time [ms]"])/1000:.0f}, $\lambda_c$: {spec.header["Center Wavelength [nm]"]}, grating: {spec.header["Selected Grating"]}')
-            label.append('setpoint: I = %.0f%s, V = %.1f%s' % (set_point+bias))    
+            setpoint_str = 'setpoint: I = %.0f%s, V = %.1f%s' % (set_point+bias)  
         if 'bias spectroscopy' in experiment:
             fb_enable = spec.get_param('Z-Ctrl hold')
             set_point = spec.get_param('setpoint_spec')
@@ -392,35 +443,60 @@ class spectrumBrowser():
             #if lockin_status == 'ON':
             label.append(f'lockin: A = {lockin_amplitude:.0f} mV, θ = {lockin_phase:.1f} deg, f = {lockin_frequency:.0f} Hz')
             if fb_enable == 'FALSE':
-                label.append('feedback on')
+                feedback_str = 'feedback on'
             elif fb_enable == 'TRUE':
-                label.append('feedback off')
-            label.append('setpoint: I = %.0f%s, V = %.1f%s' % (set_point+bias))    
+                feedback_str = 'feedback off'
+            setpoint_str = 'setpoint: I = %.0f%s, V = %.1f%s' % (set_point+bias)  
         if 'THz amplitude sweep' in experiment:
             label.append(f'Laser Rep. Rate: {spec.header["Ext. VI 1>Laser>PP Frequency (MHz)"]}')
             label.append(f'Pulse Polarity: THz1;{spec.header["Ext. VI 1>THzPolarity>THz1"]}, THz2;{spec.header["Ext. VI 1>THzPolarity>THz2"]}')
             label.append(f'Delay Positions: THz1;{spec.header["Ext. VI 1>Position>PP1 (m)"]}, THz2;{spec.header["Ext. VI 1>Position>PP2(m)"]}')
         if 'Z spectroscopy' in experiment:
+            set_point = spec.get_param('setpoint_spec')
+            bias = spec.get_param('V_spec')
+            setpoint_str = 'setpoint: I = %.0f%s, V = %.1f%s' % (set_point+bias)  
             label.append(f'Spec Points: {len(self.spec_data)}')
             label.append(f'Integration time (s): {spec.header["Integration time (s)"]}')
             label.append(f'z-sweep (m): {spec.header["Z sweep distance (m)"]}')
         if 'History Data' in experiment:
+            set_point = spec.get_param('setpoint_spec')
+            bias = spec.get_param('V_spec')
+            setpoint_str = 'setpoint: I = %.0f%s, V = %.1f%s' % (set_point+bias)  
             label.append(f'Bias (V): {spec.header["Bias>Bias (V)"]}')
             label.append(f'Feedback: {spec.header["Z-Controller>Controller status"]}')
             label.append(f'Sample Period (ms): {spec.header["Sample Period (ms)"]}')
         else:
             pass
-        label.append(f'location: {self.directories[self.directorySelection.index]}')
+
         if len(self.spec) > 1:
             d1 = self.spec[0].header["Saved Date"]
             d2 = self.spec[-1].header["Saved Date"]
-            label.append(f'Date: {d1} $\\rightarrow$ {d2}')
+            date_str = f'Date: {d1} $\\rightarrow$ {d2}'
         else:
-            label.append(f'Date: {spec.header["Saved Date"]}')
-        if self.smoothBtn.value:
+            date_str = f'Date: {spec.header["Saved Date"]}'
+
+        # construct label
+        if self.setpointToggle.value:
+            if self.feedbackToggle.value:
+                setpoint_str += " $\\rightarrow$ "
+                setpoint_str += feedback_str
+            label.append(setpoint_str)
+        if self.locationToggle.value:
+            location = self.directories[self.directorySelection.index]
+            if self.depthSelection.value == 'full':
+                label.append(f'location: {location}')
+            else:
+                location = '\\'.join(str(location).split('\\')[-int(self.depthSelection.value):])
+                label.append(f'location: {location}')
+        if self.dateToggle.value:
+            label.append(date_str)
+        if self.svgToggle.value:
             label.append(f'Savitzky-Golay Filter $\\rightarrow$ Window: {self.windowParam.value}, Order: {self.orderParam.value}')
         #label.append('comment: %s' % comment)
-        self.spec_label = '\n'.join(label)
+        if self.titleToggle.value:
+            self.spec_label = '\n'.join(label)
+        else:
+            self.spec_label = ''
         #self.updateErrorText('finish update scan info')
     def update_axes(self):
         #self.updateErrorText('update axes')
@@ -432,33 +508,33 @@ class spectrumBrowser():
         ax.clear()
         colors = plt.cm.get_cmap(str(self.cmapSelection.value))(np.linspace(0,1,len(self.spec_data)))
         #print(len(self.spec_data),len(self.labels))
-        if self.specRefBtn.value and self.specRefSelect.value != None:
-            rSpec,rSpec_data,rSpec_x = self.update_image_data(filename=self.specRefSelect.value)
         for i in range(len(self.spec_data)):
             y_values = self.spec_data[i]
             offset = 0
             if self.fixZeroBtn.value:
                 offset = np.mean(self.spec_data[i][np.where(abs(self.spec_x[i])<0.1)[0]])
-            y_values = self.smooth_data(self.spec_data[i]-offset)
+            if self.thresholdToggle.value:
+                y_values *= (y_values < self.thresholdValue.value)
+            if self.svgToggle.value:
+                y_values = self.smooth_data(y_values)
+            if self.offsetToggle.value:
+                y_values = y_values + i*self.offsetSize.value
             if self.flattenBtn.value:
                 y_values = y_values / np.max(y_values)
-            if self.offsetBtn.value:
-                y_values = y_values + i*self.offset_value.value
-            if self.specRefBtn.value and self.specRefSelect.value != None:
-                y_values = y_values / rSpec_data
+
             ax.plot(self.spec_x[i],y_values,color=colors[i],label=self.labels[i])
-        if self.specRefBtn.value and self.specRefSelect.value != None:
-            ax.plot(rSpec_x,rSpec_data/np.max(rSpec_data)-1,color='grey',label='reference')
+
         ax.set_title(self.spec_label,fontsize=self.titlesize,loc='left')
         ax.set_xlabel(f'{self.spec_info[0]["x_label"]} ({self.spec_info[0]["x_unit"]})',fontsize=self.fontsize)
         ax.set_ylabel(f'{self.channelYSelect.value[0]} ({self.spec_info[0]["y_unit"]})',fontsize=self.fontsize)
-        if self.legendBtn.value:
+        if self.legendToggle.value:
             if i > 3:
-                ax.legend(bbox_to_anchor=(1.01, 1))
+                ax.legend(bbox_to_anchor=(1.01, 1),draggable=True,labels=self.legendText.options)
             else:
-                ax.legend()
+                ax.legend(draggable=True,labels=self.legendText.options)
         else:
             pass
+    
         self.figure.tight_layout(pad=2)
         #self.updateErrorText('finish update axes')
 
@@ -607,7 +683,43 @@ class spectrumBrowser():
         else:
             self.spec_index -= 1
             self.updateInfoText()
+### settings handler
+    def handler_settingsChange(self,a):
+        self.redraw_image(a)
 
+    def handler_settingsDisplay(self,a):
+        if self.settingsBtn.value:
+            self.v_settings_layout.layout.visibility = 'visible'
+            for child in self.v_settings_layout.children:
+                if type(child) == type(self.v_settings_layout):
+                    for ch in child.children:
+                        ch.layout.visibility = 'visible'
+                child.layout.visibility = 'visible'
+        else:
+            self.v_settings_layout.layout.visibility = 'hidden'
+            for child in self.v_settings_layout.children:
+                if type(child) == type(self.v_settings_layout):
+                    for ch in child.children:
+                        ch.layout.visibility = 'hidden'
+                child.layout.visibility = 'hidden'
+
+    def update_legend_entry(self,a):
+        entry = self.legendText.value
+        options = list(self.legendText.options)
+        index = options.index(entry)
+        new_text = self.legendEntry.value
+        if new_text not in ['',None]:
+            labels = self.axes.__dict__['legend_'].get_texts()
+            labels[index].set_text(new_text)
+            options[index] = new_text
+            self.legendText.options = options
+    def update_legend_settings(self,a):
+        if a['owner'] == self.selectionList:
+            new_selection = a['new']
+            self.legendText.options = new_selection
+            self.legendText.value = new_selection[0]
+        if a['owner'] == self.legendText:
+            self.legendEntry.value = a['new']
 ### Selection update
     def handler_folder_selection(self,a):
         index=0
@@ -647,6 +759,9 @@ class spectrumBrowser():
         except Exception as err:
             self.updateErrorText('file selection error:' + str(err))
             print(traceback.format_exc())
+
+        self.update_legend_settings(update)
+
     def handler_channel_selection(self,update):
         try:
             #channel_number = self.spec[0].channels.index(self.channelSelect.value[0])

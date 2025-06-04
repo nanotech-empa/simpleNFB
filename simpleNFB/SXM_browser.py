@@ -17,7 +17,7 @@ Classes:
 import ipywidgets as widgets
 from IPython import display
 from skimage import filters
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import gaussian_filter, median_filter
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import numpy as np
@@ -89,9 +89,11 @@ class imageBrowser():
         largeLayout = widgets.Layout(visibility='visible',width='160px')
         extraLargeLayout = widgets.Layout(visibility='visible',width='200px')
         layout = lambda x: widgets.Layout(visibility='visible',width=f'{x}px')
+        layout_h = lambda x: widgets.Layout(visibility='hidden',width=f'{x}px')
+        self._layout = layout
         # selections
-        self.directorySelection = Selection_Widget(self.directories,'Folders:',rows=5)
-        self.selectionList = Selection_Widget(self.sxm_files,'SXM Files:')
+        self.directorySelection = Selection_Widget(self.directories,'Folders:',rows=8)
+        self.selectionList = Selection_Widget(self.sxm_files,'SXM Files:',rows=27)
         #self.channelSelect = Selection_Widget(['z'],'Channels:',rows=5)
         self.channelSelect = widgets.Dropdown(description='Channels:',layout=layout(200))
         self.refreshBtn = Btn_Widget('',icon='refresh',tooltip='Reload file list',layout=layout(30))
@@ -116,21 +118,58 @@ class imageBrowser():
         self.vmin = widgets.FloatText(value=0,description='Min:',step=.1,layout=layout(180))
         self.vmax = widgets.FloatText(value=1,description='Max:',step=.1,layout=layout(180))
         self.cmapSelection = widgets.Dropdown(description='colormap:',options=plt.colormaps(),value=cmap,layout=layout(180))
-
+        # figure title options
+        self.titleOptionBtn = widgets.ToggleButton(description='',icon='gear',value=False,tooltip='Display figure title options panel',layout=layout(30))
+        self.titleLabel = widgets.Label(value='Figure Title Settings',layout=layout_h(150))
+        self.titleToggle = widgets.ToggleButton(value=True, description='Show Title',tooltip='Toggle figure title',layout=layout_h(150))
+        self.channelToggle = widgets.ToggleButton(value=True,description='channel',layout=layout_h(150))
+        self.setpointToggle = widgets.ToggleButton(value=True,description='Setpoint',layout=layout_h(150))
+        self.feedbackToggle = widgets.ToggleButton(value=True,description='Feedback',layout=layout_h(150))
+        self.locationToggle = widgets.ToggleButton(value=True,description='file location',layout=layout_h(150))
+        self.depthSelection = widgets.Dropdown(value='full',options=['full',1,2,3,4,5],description='Depth:',tooltip='folder depth to display in location section of the image title',layout=layout_h(150))
+        self.nameToggle = widgets.ToggleButton(value=True,description='Filename',layout=layout_h(150))
+        self.dateToggle = widgets.ToggleButton(value=True,description='Date',layout=layout_h(150))
+        # image filter settings
+        self.filterLabel = widgets.Label(value='Image Filter Settings',layout=layout_h(150))
+        self.gaussianToggle = widgets.ToggleButton(value=False,description='Gaussian',layout=layout_h(90))
+        self.gaussianSize = widgets.BoundedIntText(value=2,min=0,max=10,step=1,tooltip='size of the gaussain kernel',layout=layout_h(60))
+        self.medianToggle = widgets.ToggleButton(value=False,description='Median',layout=layout_h(90))
+        self.medianSize = widgets.BoundedIntText(value=3,min=1,max=20,step=1,tooltip='size of the median kernel',layout=layout_h(60))
+        self.laplacToggle = widgets.ToggleButton(value=False,description='Laplace',layout=layout_h(90))
+        self.laplaceSize = widgets.BoundedIntText(value=3,min=3,max=10,step=1,tooltip='size of the laplace filter kernel',layout=layout_h(60))
+        # plane fit settings ### needs interactive plot functionality (select 3 points) --> new implementation of plane subtraction function
+        self.planeFitToggle = widgets.ToggleButton(value=False,description='Plane Fit',tooltip='plane subtraction')
 
         # layouts
-        self.h_selection_btn_layout = HBox(children=[self.refreshBtn,self.previousBtn,self.nextBtn,self.saveBtn,self.copyBtn])
-        self.h_process_btn_layout = HBox(children=[self.fixZeroBtn,self.linebylineBtn,self.flattenBtn,self.edgesBtn,self.gaussianBtn,self.invertBtn])
+        self.h_selection_btn_layout = HBox(children=[self.refreshBtn,self.previousBtn,self.nextBtn,self.saveBtn,self.copyBtn,self.titleOptionBtn])
+        self.h_process_btn_layout = HBox(children=[self.fixZeroBtn,self.linebylineBtn,self.flattenBtn,self.invertBtn])
         self.v_text_layout = VBox(children=[self.channelSelect,self.saveNote])
         self.v_btn_layout = VBox(children=(self.h_selection_btn_layout,self.h_process_btn_layout))
         self.v_color_layout = VBox(children=(self.cmapSelection,self.vmin,self.vmax))
         self.h_user_layout = HBox(children=[self.v_text_layout,self.v_btn_layout,self.v_color_layout])
         self.v_file_layout = VBox(children=[self.directorySelection,self.selectionList])
-
+        self.v_settings_layout = VBox(children=[self.titleLabel,
+                                             self.titleToggle,
+                                             self.channelToggle,
+                                             self.setpointToggle,
+                                             self.feedbackToggle,
+                                             self.locationToggle,
+                                             self.depthSelection,
+                                             self.nameToggle,
+                                             self.dateToggle,
+                                             self.filterLabel,
+                                             HBox(children=[self.gaussianToggle,self.gaussianSize],layout=layout_h(150)),
+                                             HBox(children=[self.medianToggle,self.medianSize],layout=layout_h(150)),
+                                             HBox(children=[self.laplacToggle,self.laplaceSize],layout=layout_h(150))],layout=layout_h(180))
         self.v_image_layout = VBox(children=[self.figure_display,self.h_user_layout])
-        self.mainlayout = HBox(children=[self.v_file_layout,self.v_image_layout])
+        self.mainlayout = HBox(children=[self.v_file_layout,self.v_image_layout,self.v_settings_layout])
 
         # connect widgets to functions
+        for child in self.v_settings_layout.children:
+            if type(child) == type(self.v_settings_layout):
+                for ch in child.children:
+                    ch.observe(self.handler_settingsChange,names='value')
+            child.observe(self.handler_settingsChange,names='value')
         self.nextBtn.on_click(self.nextDisplay)
         self.previousBtn.on_click(self.previousDisplay)
         self.saveBtn.on_click(self.save_figure)
@@ -149,6 +188,7 @@ class imageBrowser():
         self.vmax.observe(self.updateDisplayImage,names='value')
         self.figure.canvas.mpl_connect('button_press_event',self.mouse_click)
         self.copyBtn.on_click(self.copy_figure)
+        self.titleOptionBtn.observe(self.handler_titleOptionsDisplay,names='value')
 
         self.display()
         with self.figure_display:
@@ -257,10 +297,12 @@ class imageBrowser():
             self.remove_line_average()
         if self.fixZeroBtn.value:
             self.image_data -= np.nanmin(self.image_data)        
-        if self.gaussianBtn.value:
-            self.image_data = gaussian_filter(self.image_data,2)
-        if self.edgesBtn.value:
-            self.image_data = filters.laplace(self.image_data)
+        if self.gaussianToggle.value:
+            self.image_data = gaussian_filter(self.image_data,self.gaussianSize.value)
+        if self.medianToggle.value:
+            self.image_data = median_filter(self.image_data,size=self.medianSize.value)
+        if self.laplacToggle.value:
+            self.image_data = filters.laplace(self.image_data,ksize=self.laplaceSize.value)
 
         # set vmin and vmax without triggers image update
         self.vmin.unobserve(self.updateDisplayImage,names='values')
@@ -301,17 +343,33 @@ class imageBrowser():
                 bias[1] = 'mV'
                 bias = tuple(bias)
             #label.append(f'channel: {self.channelSelect.value}')
-            label.append(f'channel: {self.channelSelect.value} $\\rightarrow$ {mode}')
-            label.append(f'setpoint: I = {set_point[0]:.0f}{set_point[1]}, V = {bias[0]:.2f}{bias[1]}')
+            if self.channelToggle.value:
+                if self.feedbackToggle.value:
+                    label.append(f'channel: {self.channelSelect.value} $\\rightarrow$ {mode}')
+                else:
+                    label.append(f'channel: {self.channelSelect.value}')
+            if self.setpointToggle.value:
+                label.append(f'setpoint: I = {set_point[0]:.0f}{set_point[1]}, V = {bias[0]:.2f}{bias[1]}')
             #label.append('I = %.0f%s' % set_point)  
             #label.append('bias = %.2f%s' % bias)
             #label.append('size: %.1f%s x %.1f%s (%.0f%s)' % (width+height+angle))
             #label.append('comment: %s' % comment)
-            label.append(f'location: {self.directories[self.directorySelection.index]}') #dat files use header['Saved Date']
-            label.append(f'filename: {self.img.name}')
-            label.append(f'Date: {self.img.header["rec_date"]} {self.img.header["rec_time"]}')
+            if self.locationToggle.value:
+                location = self.directories[self.directorySelection.index]
+                if self.depthSelection.value == 'full':
+                    location = location
+                else:
+                    location = '\\'.join(str(location).split('\\')[-int(self.depthSelection.value):])
+                label.append(f'location: {location}') #dat files use header['Saved Date']
+            if self.nameToggle.value:
+                label.append(f'filename: {self.img.name}')
+            if self.dateToggle.value:
+                label.append(f'Date: {self.img.header["rec_date"]} {self.img.header["rec_time"]}')
         #label.append('path: %s' % self.img.path)
-        self.scan_info = '\n'.join(label)
+        if self.titleToggle.value:
+            self.scan_info = '\n'.join(label)
+        else:
+            self.scan_info = ''
         #self.updateErrorText('finish update scan info')
     def update_axes(self):
         #self.updateErrorText('update axes')
@@ -386,6 +444,26 @@ class imageBrowser():
             self.updateInfoText()
 
 ### Selection update
+    def handler_settingsChange(self,a):
+        self.redraw_image(a)
+
+    def handler_titleOptionsDisplay(self,a):
+        if self.titleOptionBtn.value:
+            self.v_settings_layout.layout.visibility = 'visible'
+            for child in self.v_settings_layout.children:
+                if type(child) == type(self.v_settings_layout):
+                    for ch in child.children:
+                        ch.layout.visibility = 'visible'
+                child.layout.visibility = 'visible'
+            self.depthSelection.layout.visibility = 'visible'
+        else:
+            self.v_settings_layout.layout.visibility = 'hidden'
+            for child in self.v_settings_layout.children:
+                if type(child) == type(self.v_settings_layout):
+                    for ch in child.children:
+                        ch.layout.visibility = 'hidden'
+                child.layout.visibility = 'hidden'
+
     def handler_folder_selection(self,a):
         index=0
         if type(a) == type(self.refreshBtn): 
