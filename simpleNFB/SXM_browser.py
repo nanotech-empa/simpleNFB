@@ -17,7 +17,7 @@ Classes:
 import ipywidgets as widgets
 from IPython import display
 from skimage import filters
-from scipy.ndimage import gaussian_filter, median_filter
+from scipy.ndimage import gaussian_filter, median_filter, gaussian_laplace
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import numpy as np
@@ -110,6 +110,7 @@ class imageBrowser():
         self.edgesBtn = widgets.ToggleButton(description='',value=False,layout=layout(30),icon='dot-circle-o',tooltip='Apply laplace filter (edge detection)')
         self.gaussianBtn = widgets.ToggleButton(description='',value=False,layout=layout(30),icon='bullseye',tooltip='Apply a 3x3 Gaussian filter')
         self.invertBtn = widgets.ToggleButton(description='',value=False,layout=layout(30),icon='exchange',tooltip='Invert sign of the image data')
+        self.directionBtn = widgets.ToggleButton(description='',value=False,layout=layout(30),icon='caret-square-o-right')
         self.fixZeroBtn = widgets.ToggleButton(description='',value=False,layout=layout(30),icon='neuter',tooltip='Rescale the image data so the minimum value is zero')
         self.saveBtn = Btn_Widget('',layout=layout(30),icon='file-image-o',tooltip='Save displayed image to \\browser_output folder\nText in the "note" is appended to figure filename')
         self.copyBtn = Btn_Widget('',layout=layout(30),icon='clipboard',tooltip='Save displayed image to \\browser_output folder\ncopy displayed image to clipboard')
@@ -128,6 +129,7 @@ class imageBrowser():
         self.locationToggle = widgets.ToggleButton(value=True,description='file location',layout=layout_h(150))
         self.depthSelection = widgets.Dropdown(value='full',options=['full',1,2,3,4,5],description='Depth:',tooltip='folder depth to display in location section of the image title',layout=layout_h(150))
         self.nameToggle = widgets.ToggleButton(value=True,description='Filename',layout=layout_h(150))
+        self.directionToggle = widgets.ToggleButton(value=True,description='Direction',layout=layout_h(150))
         self.dateToggle = widgets.ToggleButton(value=True,description='Date',layout=layout_h(150))
         # image filter settings
         self.filterLabel = widgets.Label(value='Image Filter Settings',layout=layout_h(150))
@@ -136,13 +138,13 @@ class imageBrowser():
         self.medianToggle = widgets.ToggleButton(value=False,description='Median',layout=layout_h(90))
         self.medianSize = widgets.BoundedIntText(value=3,min=1,max=20,step=1,tooltip='size of the median kernel',layout=layout_h(60))
         self.laplacToggle = widgets.ToggleButton(value=False,description='Laplace',layout=layout_h(90))
-        self.laplaceSize = widgets.BoundedIntText(value=3,min=3,max=10,step=1,tooltip='size of the laplace filter kernel',layout=layout_h(60))
+        self.laplaceSize = widgets.BoundedIntText(value=1,min=1,max=10,step=1,tooltip='size of the laplace filter kernel',layout=layout_h(60))
         # plane fit settings ### needs interactive plot functionality (select 3 points) --> new implementation of plane subtraction function
         self.planeFitToggle = widgets.ToggleButton(value=False,description='Plane Fit',tooltip='plane subtraction')
 
         # layouts
         self.h_selection_btn_layout = HBox(children=[self.refreshBtn,self.previousBtn,self.nextBtn,self.saveBtn,self.copyBtn,self.titleOptionBtn])
-        self.h_process_btn_layout = HBox(children=[self.fixZeroBtn,self.linebylineBtn,self.flattenBtn,self.invertBtn])
+        self.h_process_btn_layout = HBox(children=[self.directionBtn,self.fixZeroBtn,self.linebylineBtn,self.flattenBtn,self.invertBtn])
         self.v_text_layout = VBox(children=[self.channelSelect,self.saveNote])
         self.v_btn_layout = VBox(children=(self.h_selection_btn_layout,self.h_process_btn_layout))
         self.v_color_layout = VBox(children=(self.cmapSelection,self.vmin,self.vmax))
@@ -156,6 +158,7 @@ class imageBrowser():
                                              self.locationToggle,
                                              self.depthSelection,
                                              self.nameToggle,
+                                             self.directionToggle,
                                              self.dateToggle,
                                              self.filterLabel,
                                              HBox(children=[self.gaussianToggle,self.gaussianSize],layout=layout_h(150)),
@@ -174,6 +177,7 @@ class imageBrowser():
         self.previousBtn.on_click(self.previousDisplay)
         self.saveBtn.on_click(self.save_figure)
         self.refreshBtn.on_click(self.handler_folder_selection)
+        self.directionBtn.observe(self.update_scan_direction,names='value')
         self.linebylineBtn.observe(self.redraw_image,names='value')
         self.flattenBtn.observe(self.redraw_image,names='value')
         self.invertBtn.observe(self.redraw_image,names='value')
@@ -281,7 +285,11 @@ class imageBrowser():
     def update_image_data(self):
         #self.updateErrorText('update image data')
         channel = self.channelSelect.value
-        direction = 'forward' # add toggle switch to choose forward and backward
+        if self.directionBtn.value:
+            direction = 'backward'
+        else:
+            direction = 'forward'
+
         flatten = self.flattenBtn.value
         offset = False # look into how this works
         zero = False # look into how this works
@@ -290,6 +298,8 @@ class imageBrowser():
         except:
             self.updateErrorText('Error in flattening routine: setting flatten=False')
             self.image_data,unit = self.img.get_channel(channel, direction = direction, flatten=False, offset=offset,zero=zero)
+        if direction == 'backward':
+            self.image_data = np.flip(self.image_data,axis=1)
         self.image_info['unit'] = unit
         if self.invertBtn.value:
             self.image_data *= -1
@@ -302,7 +312,7 @@ class imageBrowser():
         if self.medianToggle.value:
             self.image_data = median_filter(self.image_data,size=self.medianSize.value)
         if self.laplacToggle.value:
-            self.image_data = filters.laplace(self.image_data,ksize=self.laplaceSize.value)
+            self.image_data = -1*gaussian_laplace(self.image_data,self.laplaceSize.value)
 
         # set vmin and vmax without triggers image update
         self.vmin.unobserve(self.updateDisplayImage,names='values')
@@ -362,7 +372,12 @@ class imageBrowser():
                     location = '\\'.join(str(location).split('\\')[-int(self.depthSelection.value):])
                 label.append(f'location: {location}') #dat files use header['Saved Date']
             if self.nameToggle.value:
-                label.append(f'filename: {self.img.name}')
+                if self.directionToggle.value:
+                    direction = {True:'backward',False:'forward'}[self.directionBtn.value]
+                    name_str = f'filename: {self.img.name} $\\rightarrow$ direction: {direction}'
+                else:
+                    name_str = f'filename: {self.img.name}'
+                label.append(name_str)
             if self.dateToggle.value:
                 label.append(f'Date: {self.img.header["rec_date"]} {self.img.header["rec_time"]}')
         #label.append('path: %s' % self.img.path)
@@ -442,7 +457,12 @@ class imageBrowser():
         else:
             self.image_index -= 1
             self.updateInfoText()
-
+    def update_scan_direction(self,a):
+        if self.directionBtn.value:
+            self.directionBtn.icon = 'caret-square-o-left'
+        else:
+            self.directionBtn.icon = 'caret-square-o-right'
+        self.redraw_image(a)
 ### Selection update
     def handler_settingsChange(self,a):
         self.redraw_image(a)
