@@ -110,7 +110,7 @@ class imageBrowser():
         self.edgesBtn = widgets.ToggleButton(description='',value=False,layout=layout(30),icon='dot-circle-o',tooltip='Apply laplace filter (edge detection)')
         self.gaussianBtn = widgets.ToggleButton(description='',value=False,layout=layout(30),icon='bullseye',tooltip='Apply a 3x3 Gaussian filter')
         self.invertBtn = widgets.ToggleButton(description='',value=False,layout=layout(30),icon='exchange',tooltip='Invert sign of the image data')
-        self.directionBtn = widgets.ToggleButton(description='',value=False,layout=layout(30),icon='caret-square-o-right')
+        self.directionBtn = widgets.ToggleButton(description='',value=False,layout=layout(30),icon='caret-square-o-right',tooltip='select scan direction, default is forward')
         self.fixZeroBtn = widgets.ToggleButton(description='',value=False,layout=layout(30),icon='neuter',tooltip='Rescale the image data so the minimum value is zero')
         self.saveBtn = Btn_Widget('',layout=layout(30),icon='file-image-o',tooltip='Save displayed image to \\browser_output folder\nText in the "note" is appended to figure filename')
         self.copyBtn = Btn_Widget('',layout=layout(30),icon='clipboard',tooltip='Save displayed image to \\browser_output folder\ncopy displayed image to clipboard')
