@@ -19,6 +19,7 @@ from IPython import display
 #from IPython.core import html
 import matplotlib.pyplot as plt
 from matplotlib import cm
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 import numpy as np
 from scipy.signal import savgol_filter
 import traceback
@@ -71,7 +72,7 @@ class spectrumBrowser():
     def __init__(self,figsize=(6,5),fontsize=12,titlesize=12,cmap='Greys_r',home_directory='./',sxmBrowser=None):
         self.img = None
         self.figure,self.axes = plt.subplots(ncols=1,figsize=figsize,num='dat') # simple default figure size
-        #self.wfFigure,self.wfAxes = plt.subplots(ncols=1,figsize=figsize)
+        self.cb = None
         self.sxmBrowser = sxmBrowser
         if sxmBrowser == None:
             self.referenceLocBtn.disabled(True)
@@ -85,8 +86,9 @@ class spectrumBrowser():
         self.errors = []
         self.spec_index = [0]
         self.axes.plot(self.spec_x[0],self.spec_data[0])
-        self.default_channel = {'STML':['Wavelength', 'Intensity'],'bias spectroscopy':['V','dIdV'],'Z spectroscopy':['zrel','I']}
+        self.default_channel = {'STML':['Wavelength', 'Intensity'],'bias spectroscopy':['V','dIdV'],'Z spectroscopy':['zrel','I'],'History Data': ['Index','I']}
         self.loaded_experiments = None
+        self.current_experiment = None
         self.active_dir = Path(home_directory)
         self.sxm_files = []
         self.dat_files = []
@@ -109,7 +111,7 @@ class spectrumBrowser():
         self.addFilterBtn = widgets.Button(description='+',tooltip='click to add new filter to selection',layout=layout(30))
     
         self.channelXSelect = widgets.Dropdown(options=[None],value=None,description='X:')
-        self.channelYSelect = widgets.SelectMultiple(options=[None],value=[None],description='Y:',rows=3)
+        self.channelYSelect = widgets.SelectMultiple(options=[None],value=[None],description='Y:',rows=5)
 
         #self.channelXSelect = widgets.Dropdown(options=['V'],value='V',description='X:')
         #self.channelYSelect = widgets.SelectMultiple(options=['I'],value=['I'],description='Y:',rows=3)
@@ -149,6 +151,8 @@ class spectrumBrowser():
         self.offset_value = widgets.FloatText(value=0.1e-12,description='offset:',step=.1e-12,readout_format='.1e',layout=largeLayout)
         # colormap
         self.cmapSelection = widgets.Dropdown(description='colormap:',options=plt.colormaps(),value=cmap,layout=layout(200))
+        self.markerSelection = widgets.Dropdown(description='plotMarker:',options=['N','o','*','s','^','X'],value='o',layout=layout(200))
+
         # smoothing options
         self.smoothBtn = widgets.ToggleButton(description='',value=False,layout=layout(30),icon='filter',tooltip='Apply savitzky-golay filter to plot data')
         self.windowParam = widgets.BoundedIntText(description='window:',value=3,min=3,max=101,step=2,layout=largeLayout)
@@ -180,19 +184,19 @@ class spectrumBrowser():
         self.svgOrder = widgets.BoundedIntText(description='order:',value=1,min=1,max=5,step=1,layout=layout_h(150))
         self.thresholdToggle = widgets.ToggleButton(value=False,description='Threshold',tooltip='enable to cut out values above threshold value',layout=layout_h(150))
         self.thresholdValue = widgets.FloatText(value=100,description='value:',layout=layout_h(150))
-
+        self.averageToggle = widgets.ToggleButton(value=False,description='Average',tooltip='enable to plot average of all selected spectra, uses np.quantile to remove outliers',layout=layout_h(150))
         # layouts
         self.h_new_filter_layout = HBox(children=[self.newFilterText,self.addFilterBtn])
         self.v_filter_layout = VBox(children=[self.filterSelection,self.h_new_filter_layout])
         self.v_text_layout = VBox(children=[self.saveNote,self.errorText])
         self.h_process_layout = HBox(children=[self.flattenBtn,self.fixZeroBtn,self.referenceLocBtn,self.plot2DBtn])
         self.h_selection_btn_layout = HBox(children=[self.refreshBtn,self.csvBtn,self.saveBtn,self.copyBtn,self.settingsBtn])
-        self.v_param_layout = VBox(children=[self.offset_value,self.windowParam,self.orderParam])
+
         self.v_channel_layout = VBox(children=[self.channelXSelect,self.channelYSelect,self.saveNote])
         self.v_file_select_layout = VBox(children=[self.directorySelection,self.selectionList,self.v_filter_layout])
         
-        self.v_btn_layout = VBox(children=[self.h_selection_btn_layout,self.h_process_layout,self.cmapSelection])
-        self.h_user_layout = HBox(children=[self.v_channel_layout,self.v_btn_layout,self.v_param_layout])
+        self.v_btn_layout = VBox(children=[self.h_selection_btn_layout,self.h_process_layout,self.cmapSelection,self.markerSelection])
+        self.h_user_layout = HBox(children=[self.v_channel_layout,self.v_btn_layout])
 
         self.v_settings_layout = VBox(children=[self.legendLabel,
                                                 self.legendText,
@@ -213,7 +217,8 @@ class spectrumBrowser():
                                                     self.svgSize,
                                                     self.svgOrder,
                                                     self.thresholdToggle,
-                                                    self.thresholdValue],
+                                                    self.thresholdValue,
+                                                    self.averageToggle],
                                                     layout=layout_h(180))
 
         self.v_image_layout = VBox(children=[self.figure_display,self.h_user_layout])
@@ -380,7 +385,11 @@ class spectrumBrowser():
                 for spec in self.spec:
                     spec_data,yunit = spec.get_channel(channelY[0])
                     self.spec_data.append(spec_data)
-                    spec_x,xunit = spec.get_channel(channelX)
+                    if channelX == 'Index':
+                        spec_x = np.arange(len(spec_data))
+                        xunit = 'N'
+                    else:
+                        spec_x,xunit = spec.get_channel(channelX)
                     self.spec_info.append({'x_unit':xunit,'y_unit':yunit,'x_label':channelX})
                     self.spec_x.append(spec_x)
                     self.labels.append(spec.name)
@@ -505,30 +514,49 @@ class spectrumBrowser():
             self.figure,self.axes = plt.subplots(ncols=1,figsize=(8,8))
             #self.figure.tight_layout(pad=2)
         ax = self.axes
+        if self.cb:
+            self.cb.remove()
+            self.cb = None
         ax.clear()
         colors = plt.cm.get_cmap(str(self.cmapSelection.value))(np.linspace(0,1,len(self.spec_data)))
         #print(len(self.spec_data),len(self.labels))
+
+        y_values = self.spec_data
         for i in range(len(self.spec_data)):
-            y_values = self.spec_data[i]
+            y = self.spec_data[i]
             offset = 0
             if self.fixZeroBtn.value:
                 offset = np.mean(self.spec_data[i][np.where(abs(self.spec_x[i])<0.1)[0]])
             if self.thresholdToggle.value:
-                y_values *= (y_values < self.thresholdValue.value)
+                y *= (y < self.thresholdValue.value)
             if self.svgToggle.value:
-                y_values = self.smooth_data(y_values)
-            if self.offsetToggle.value:
-                y_values = y_values + i*self.offsetSize.value
+                y = self.smooth_data(y)
             if self.flattenBtn.value:
-                y_values = y_values / np.max(y_values)
+                y = y / np.max(y)
+            if self.offsetToggle.value:
+                y = y + i*self.offsetSize.value
+            y_values[i] = y
 
-            ax.plot(self.spec_x[i],y_values,color=colors[i],label=self.labels[i])
+        if self.averageToggle.value and len(self.spec_data) >= 3:
+            y = []
+            for el in zip(*y_values):
+                nel = el*(el<np.quantile(el,.99))
+                filtered = [l for l in nel if l != 0]
+                if len(filtered) != 0:
+                    averaged = np.average(filtered)
+                else:
+                    averaged = 0
+                y.append(averaged)
+            y_values = [np.array(y)]
+
+        for i in range(len(y_values)):
+                ax.plot(self.spec_x[i],y_values[i],color=colors[i],label=self.labels[i])
 
         ax.set_title(self.spec_label,fontsize=self.titlesize,loc='left')
         ax.set_xlabel(f'{self.spec_info[0]["x_label"]} ({self.spec_info[0]["x_unit"]})',fontsize=self.fontsize)
         ax.set_ylabel(f'{self.channelYSelect.value[0]} ({self.spec_info[0]["y_unit"]})',fontsize=self.fontsize)
         if self.legendToggle.value:
-            if i > 3:
+            if len(self.spec_data) > 3:
                 ax.legend(bbox_to_anchor=(1.01, 1),draggable=True,labels=self.legendText.options)
             else:
                 ax.legend(draggable=True,labels=self.legendText.options)
@@ -593,9 +621,12 @@ class spectrumBrowser():
             for i,spec in enumerate(self.spec):
                 rx,ry = self.relative_position(self.sxmBrowser.img,spec)
                 rel_positions.append([rx,ry])
-                ax.plot(rx,ry,marker='o',markersize=10,color=colors[i],label=self.labels[i].split('.')[0][-3:])
-            if self.specRefBtn.value and self.specRefSelect.value != None:
-                pass
+                if self.markerSelection.value != 'N':
+                    ax.plot(rx,ry,marker=self.markerSelection.value,markersize=10,color=colors[i],label=self.labels[i].split('.')[0][-3:])
+                elif self.markerSelection.value == 'N':
+                    start = np.max(self.spec_index)-np.min(self.spec_index)+1
+                    ax.text(rx,ry,f'{start-i}',color='r',fontsize=10,ha='center',va='center')
+
     def plot2D(self,a):
         if len(self.spec) != 0:
             dataPoints = max([len(spec_data) for spec_data in self.spec_data])
@@ -605,32 +636,34 @@ class spectrumBrowser():
             ymax = len(yLabels)
             ylabel = 'Spec Number'
             dataArray = np.zeros((len(self.spec),dataPoints))
-            for i,spec_data in enumerate(self.spec_data):
-                dataArray[i,:len(spec_data)] = spec_data
+            directory = self.directories[self.directorySelection.index]
+            if directory != self.active_dir:
+                directory = os.path.join(self.active_dir,directory)
+            files = [(self.spec_data[i], os.path.getmtime(os.path.join(directory, f))) for i,f in enumerate(self.selectionList.value)]
+            data = sorted(files, key=lambda x: x[1], reverse=False)
+            direction = np.sign(xData[0]-xData[-1])
+            for i,spec_data in enumerate([d[0] for d in data]):
+                if direction == 1:
+                    dataArray[i,:len(spec_data)] = np.flip(spec_data)
+                else:
+                    dataArray[i,:len(spec_data)] = spec_data
             vmin = np.min(dataArray)
             vmax = np.max(dataArray)
-            if 'QtE' in self.active_dir:
-                delayPositionsTHz1 = [float(spec.header["Ext. VI 1>Position>PP1 (m)"]) for spec in self.spec]
-                delayPositionsTHz2 = [float(spec.header["Ext. VI 1>Position>PP2(m)"]) for spec in self.spec]
-                if abs(sum(np.gradient(delayPositionsTHz1))) > abs(sum(np.gradient(delayPositionsTHz2))):
-                    delayPositions = delayPositionsTHz1
-                    ylabel = 'Delay THz1 (m)'
-                else:
-                    delayPositions = delayPositionsTHz2
-                    ylabel = 'Delay THz2 (m)'
-                ymin = delayPositions[0]
-                ymax = delayPositions[-1]
-                maxVal = np.max(np.abs(dataArray))
-                vmin = -maxVal
-                vmax = maxVal
             #print(yLabels)
             self.axes.clear()
-            self.axes.imshow(dataArray,aspect='auto',origin='lower',extent=[xData[0],xData[-1],ymin,ymax],cmap=self.cmapSelection.value)
-            if 'QtE' not in self.active_dir:
-                self.axes.set_yticks(np.arange(len(yLabels))+.5)
-                self.axes.set_yticklabels(yLabels)
+            axesImage = self.axes.imshow(dataArray,aspect='auto',origin='lower',extent=[np.min(xData),np.max(xData),ymin,ymax],cmap=self.cmapSelection.value)
             self.axes.set_ylabel(ylabel)
             self.axes.set_xlabel(f'{self.spec_info[0]["x_label"]} ({self.spec_info[0]["x_unit"]})')
+            if not self.cb:
+                divider = make_axes_locatable(self.axes)
+                cax = divider.append_axes("right", size="5%",pad=0.05)
+                #self.cb = self.figure.colorbar(axesImage,ax=ax,shrink=0.75,pad=.05)
+                self.cb = self.figure.colorbar(axesImage,cax=cax)
+            else:
+                #self.cb.remove()
+                self.cb.update_normal(axesImage)# = self.figure.colorbar(axesImage,ax=ax,shrink=0.75,pad=.01)
+            self.cb.set_label(f'{self.channelYSelect.value[0]} ({self.spec_info[0]["y_unit"]})',fontsize=self.fontsize)
+            
         else:
             pass
         
@@ -652,20 +685,21 @@ class spectrumBrowser():
             #print(default_channels)
             current_value_X = self.channelXSelect.value
             current_value_Y = self.channelYSelect.value[0]
-            self.channelXSelect.options = self.spec[0].channels
+            self.channelXSelect.options = ['Index'] + self.spec[0].channels
             self.channelYSelect.options = self.spec[0].channels
-            if current_value_X in self.spec[0].channels:
+            if self.current_experiment == self.loaded_experiments[0] and current_value_X in self.spec[0].channels:
                 self.channelXSelect.value = current_value_X
             elif default_channels[0] != None:
                 self.channelXSelect.value = default_channels[0]
             else:
-                self.channelXSelect.value = self.spec[0].channels[0]
-            if current_value_Y in self.spec[0].channels:
+                self.channelXSelect.value = ['Index']
+            if self.current_experiment == self.loaded_experiments[0] and current_value_Y in self.spec[0].channels:
                 self.channelYSelect.value = [current_value_Y]
             elif default_channels[1] != None:
                 self.channelYSelect.value = [default_channels[1]]
             else:
                 self.channelYSelect.value = [self.spec[0].channels[0]]
+        self.current_experiment = self.loaded_experiments[0]
         #self.updateErrorText(self.channelSelect.value)
     def updateErrorText(self,text):
         self.errors.append(f'{len(self.errors)} {text}')
@@ -738,6 +772,8 @@ class spectrumBrowser():
             elif '.dat' in file:
                 if 'all' in self.filterSelection.value or any(filt in file for filt in self.filterSelection.value):
                     self.dat_files.append(file)
+        files = [(f, os.path.getmtime(os.path.join(directory, f))) for f in self.dat_files]
+        self.dat_files = [f[0] for f in sorted(files, key=lambda x: x[1], reverse=True)]
         self.all_files = self.sxm_files + self.dat_files
         self.selectionList.options = self.dat_files
         self.specRefSelect.options = [None]+list(self.dat_files)

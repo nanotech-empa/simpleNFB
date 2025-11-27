@@ -190,9 +190,11 @@ class imageBrowser():
         self.cmapSelection.observe(self.updateDisplayImage,names='value')
         self.vmin.observe(self.updateDisplayImage,names='value')
         self.vmax.observe(self.updateDisplayImage,names='value')
-        self.figure.canvas.mpl_connect('button_press_event',self.mouse_click)
         self.copyBtn.on_click(self.copy_figure)
         self.titleOptionBtn.observe(self.handler_titleOptionsDisplay,names='value')
+
+        # mpl events
+        #self.figure.canvas.mpl_connect('button_press_event',self.mouse_click)
 
         self.display()
         with self.figure_display:
@@ -262,11 +264,19 @@ class imageBrowser():
                 print( self.image_data[i,:])
     # linescan
     def mouse_click(self,event):
-        ix = event.xdata
-        iy = event.ydata
-        d = np.sqrt(ix**2+iy**2)
+        x = event.xdata
+        y = event.ydata
+        #image_value = self.image_data[iy,ix]
+        try:
+            ix = np.round(ix,3)
+            iy = np.round(iy,3)
+        except:
+            pass
+        self.saveNote.value = f'{x}'
+        print(ix,iy)
+        #d = np.sqrt(ix**2+iy**2)
 
-        self.updateErrorText(str(round(event.xdata,2)) + ' ' + str(round(event.ydata,2)))
+        #self.updateErrorText(str(round(event.xdata,2)) + ' ' + str(round(event.ydata,2)))
     # image generation
     def redraw_image(self,a):
         self.update_image_data()
@@ -501,6 +511,7 @@ class imageBrowser():
             elif '.dat' in file:
                 self.dat_files.append(file)
         self.all_files = self.sxm_files + self.dat_files
+        self.sxm_files = list(np.flip(self.sxm_files))
         self.selectionList.options = self.sxm_files
         if len(self.sxm_files) != 0:
             self.filenameText.value = self.sxm_files[index]
@@ -508,7 +519,7 @@ class imageBrowser():
                 self.selectionList.value = self.filenameText.value
     def handler_file_selection(self,update):
         #self.updateErrorText(str(update))
-        self.image_index = self.all_files.index(self.selectionList.value)
+        self.image_index = self.sxm_files.index(self.selectionList.value)
         try:
             self.load_new_image()
             self.updateDisplayImage()
