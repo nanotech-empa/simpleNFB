@@ -20,8 +20,10 @@ from IPython import display
 import matplotlib.pyplot as plt
 from matplotlib import cm
 from mpl_toolkits.axes_grid1 import make_axes_locatable
+from matplotlib.ticker import MultipleLocator, AutoMinorLocator
 import numpy as np
-from scipy.signal import savgol_filter
+from scipy.signal import savgol_filter,medfilt
+from scipy.interpolate import interp1d
 import traceback
 import subprocess
 from tkinter import Tk
@@ -29,9 +31,20 @@ from tkinter import filedialog
 from pathlib import Path
 import os
 import sys
+import time
 sys.path.append(r'./spmpy')
 from spmpy import Spm
 
+### matplotlib default settings ###
+import matplotlib as mpl
+mpl.rcParams['figure.dpi'] = 100
+mpl.rcParams['axes.linewidth'] = 0.8 # Previous Setting
+mpl.rcParams['font.family'] = ['Microsoft Sans Serif']
+mpl.rcParams['font.size'] = 8
+mpl.rcParams['axes.labelpad'] = 3
+mpl.rcParams['xtick.labelsize'] = 7
+mpl.rcParams['ytick.labelsize'] = 7
+mpl.rcParams['axes.labelsize'] = 7
 # Layouts
 def HBox(*pargs, **kwargs):
     box = widgets.Box(*pargs, **kwargs)
@@ -69,9 +82,10 @@ class spectrumBrowser():
         - spec can be accessed for further analysis/processing
         - axes can be accessed for futher plot modification (axis limits, labels, etc)
     '''
-    def __init__(self,figsize=(6,5),fontsize=12,titlesize=12,cmap='Greys_r',home_directory='./',sxmBrowser=None):
+    def __init__(self,figsize=(3.5,2.8),fontsize=8,titlesize=5,cmap='Greys_r',home_directory='./',sxmBrowser=None):
         self.img = None
-        self.figure,self.axes = plt.subplots(ncols=1,figsize=figsize,num='dat') # simple default figure size
+        self.figure,self.axes = plt.subplots(ncols=1,figsize=figsize,num='dat',dpi=150) # simple default figure size
+        self.axes2 = None
         self.cb = None
         self.sxmBrowser = sxmBrowser
         if sxmBrowser == None:
@@ -82,7 +96,9 @@ class spectrumBrowser():
         self.spec_data = [np.zeros(64)] # 64 x 64 pixel zeros
         self.spec_info = [{'x_unit':'N','y_unit':'a.u.','x_label':'Index'}]
         self.spec_label = ''
+        self.plasmonInfo = {'file':None,'spm':None,'interp':None}
         self.labels = []
+        self.legendFontsize = [8,6,4,3]
         self.errors = []
         self.spec_index = [0]
         self.axes.plot(self.spec_x[0],self.spec_data[0])
@@ -102,11 +118,12 @@ class spectrumBrowser():
         extraLargeLayout = widgets.Layout(visibility='visible',width='200px')
         layout = lambda x: widgets.Layout(visibility='visible',width=f'{x}px')
         layout_h = lambda x: widgets.Layout(visibility='hidden',width=f'{x}px')
-        # selections
+
+        ### selections ###
         #self.rootSelection = Btn_Widget('Open',disabled=True)
         self.directorySelection = Selection_Widget(self.directories,'Folders:',rows=5)
         self.selectionList = widgets.SelectMultiple(options=self.dat_files,value=[],description='DAT Files:',rows=30)
-        self.filterSelection = widgets.SelectMultiple(options=['all','dIdV','Z-Spectroscopy','stml'],value=['all'],description='Filter',rows=3)
+        self.filterSelection = widgets.SelectMultiple(options=['all','dIdV','Z-Spectroscopy','stml','History'],value=['all'],description='Filter',rows=5)
         self.newFilterText = widgets.Text(description='New Filter',tooltip='user defined string to use for file filtering',layout=layout(200))
         self.addFilterBtn = widgets.Button(description='+',tooltip='click to add new filter to selection',layout=layout(30))
     
@@ -143,9 +160,6 @@ class spectrumBrowser():
         #self.figure_tabs = widgets.Tab(children=[self.figure_display])
         #self.figure_tabs.titles = ['Line Spectrum', 'Waterfall']
 
-        # analyis
-        self.specRefBtn = widgets.ToggleButton(description='Reference',value=False,layout=mediumLayout)
-        self.specRefSelect = widgets.Dropdown(description='spec:',options=[None]+list(self.selectionList.options),value=None,layout=largeLayout)
         # offset options
         self.offsetBtn = widgets.ToggleButton(description='',value=False,layout=layout(30),icon='navicon',tooltip='Apply vertical offset')
         self.offset_value = widgets.FloatText(value=0.1e-12,description='offset:',step=.1e-12,readout_format='.1e',layout=largeLayout)
@@ -160,31 +174,50 @@ class spectrumBrowser():
         # settings menu toggle
         self.settingsBtn = widgets.ToggleButton(description='',icon='gear',value=False,tooltip='Display figure title options panel',layout=layout(30))
         # figure title options
-        self.titleLabel = widgets.Label(value='Figure Title Settings',layout=layout_h(150))
-        self.titleToggle = widgets.ToggleButton(value=True, description='Show Title',tooltip='Toggle figure title',layout=layout_h(150))
-        self.setpointToggle = widgets.ToggleButton(value=True,description='Setpoint',layout=layout_h(150))
-        self.feedbackToggle = widgets.ToggleButton(value=True,description='Feedback',layout=layout_h(150))
-        self.locationToggle = widgets.ToggleButton(value=True,description='file location',layout=layout_h(150))
-        self.depthSelection = widgets.Dropdown(value='full',options=['full',1,2,3,4,5],description='Depth:',tooltip='folder depth to display in location section of the image title',layout=layout_h(150))
-        self.nameToggle = widgets.ToggleButton(value=True,description='Filename',layout=layout_h(150))
-        self.dateToggle = widgets.ToggleButton(value=True,description='Date',layout=layout_h(150))
+        self.titleLabel = widgets.Label(value='Figure Title Settings',layout=layout(150))
+        self.titleToggle = widgets.ToggleButton(value=True, description='Show Title',tooltip='Toggle figure title',layout=layout(150))
+        self.setpointToggle = widgets.ToggleButton(value=True,description='Setpoint',layout=layout(150))
+        self.feedbackToggle = widgets.ToggleButton(value=True,description='Feedback',layout=layout(150))
+        self.locationToggle = widgets.ToggleButton(value=True,description='file location',layout=layout(150))
+        self.depthSelection = widgets.Dropdown(value='full',options=['full',1,2,3,4,5],description='Depth:',tooltip='folder depth to display in location section of the image title',layout=layout(150),style={'description_width':'initial'})
+        self.nameToggle = widgets.ToggleButton(value=True,description='Filename',layout=layout(150))
+        self.dateToggle = widgets.ToggleButton(value=True,description='Date',layout=layout(150))
         # legend settings
         self.legendLabel = widgets.Label(value='Legend Settings',layout=layout_h(150))
-        self.legendText = widgets.Select(value='',options=[''],rows=3,layout=layout_h(150))
+        self.defaultLegendToggle = widgets.ToggleButton(value=True,description='default',tooltip='Toggle to enable the default Legend using filenames as labels',layout=layout(150))
+        self.customLegendToggle = widgets.ToggleButton(value=False,description='custom',tooltip='Toggle to enable a custom Legend with user defined labels',layout=layout(150))
+        self.legendText = widgets.Select(value='',options=[''],rows=5,layout=layout(150),disabled=False)
         # The above code is accessing the `legendEntry` attribute of the `self` object in Python.
-        self.legendEntry = widgets.Text(description='',tooltip='enter new legend text here',layout=layout_h(150))
-        self.legendToggle = widgets.ToggleButton(value=True,description='legend',layout=layout_h(74))
-        self.legendUpdate = widgets.Button(description='Update',tooltip='Press to update selected legend entry with new text',layout=layout_h(74))
+        self.legendEntry = widgets.Text(description='',tooltip='enter new legend text here',layout=layout(150),disabled=False)
+        self.legendToggle = widgets.ToggleButton(value=True,description='legend',layout=layout(74))
+        self.legendUpdate = widgets.Button(description='Update',tooltip='Press to update selected legend entry with new text',layout=layout(74),disabled=False)
         # data filter settings
-        self.filterLabel = widgets.Label(value='Data Filter Settings',layout=layout_h(150))
-        self.offsetToggle = widgets.ToggleButton(value=False,description='Offset',tooltip='Apply a vertical offset to each line in dataset',layout=layout_h(150))
-        self.offsetSize = widgets.FloatText(value=0.1e-12,description='amount:',step=.1e-12,readout_format='.1e',layout=layout_h(150))
-        self.svgToggle = widgets.ToggleButton(value=False,description='Savitsky-Golay',layout=layout_h(150))
-        self.svgSize = widgets.BoundedIntText(description='window:',value=3,min=3,max=101,step=2,layout=layout_h(150))
-        self.svgOrder = widgets.BoundedIntText(description='order:',value=1,min=1,max=5,step=1,layout=layout_h(150))
-        self.thresholdToggle = widgets.ToggleButton(value=False,description='Threshold',tooltip='enable to cut out values above threshold value',layout=layout_h(150))
-        self.thresholdValue = widgets.FloatText(value=100,description='value:',layout=layout_h(150))
-        self.averageToggle = widgets.ToggleButton(value=False,description='Average',tooltip='enable to plot average of all selected spectra, uses np.quantile to remove outliers',layout=layout_h(150))
+        self.filterLabel = widgets.Label(value='Data Filter Settings',layout=layout(150))
+        self.offsetToggle = widgets.ToggleButton(value=False,description='Offset',tooltip='Apply a vertical offset to each line in dataset',layout=layout(150))
+        self.offsetSize = widgets.FloatText(value=0.1e-12,description='amount:',step=.1e-12,readout_format='.1e',layout=layout(150),style={'description_width':'initial'})
+        self.svgToggle = widgets.ToggleButton(value=False,description='Savitsky-Golay',layout=layout(150))
+        self.svgSize = widgets.BoundedIntText(description='window:',value=3,min=3,max=101,step=2,layout=layout(150))
+        self.svgOrder = widgets.BoundedIntText(description='order:',value=1,min=1,max=5,step=1,layout=layout(150))
+        self.medFiltBtn = widgets.ToggleButton(description='Median',value=False,layout=layout(90),tooltip='Apply median filter to plot data')
+        self.medFiltSize = widgets.BoundedIntText(description='',value=3,min=3,max=21,step=2,layout=layout(60))
+        self.thresholdToggle = widgets.ToggleButton(value=False,description='Threshold',tooltip='enable to cut out values above threshold value',layout=layout(150))
+        self.thresholdValue = widgets.FloatText(value=100,description='value:',layout=layout(150))
+        self.averageToggle = widgets.ToggleButton(value=False,description='Average',tooltip='enable to plot average of all selected spectra, uses np.quantile to remove outliers',layout=layout(150))
+        self.groupSize = widgets.BoundedIntText(description='Group:',value=3,min=3,max=20,step=1,tooltip='defines the group size used in batched averaging',layout=layout(150))
+        # plotting modes settings
+        self.stmlToggle = widgets.ToggleButton(value=False,description='STML Mode',tooltip='Convert bottom axis to energy\nadd top axis in wavelength\nscale intensity to current x time',layout=layout(150))
+        self.plasmonReference = widgets.Dropdown(options=['None'],value='None',description='Plasmon:',layout=layout(150))
+
+        # axes controls
+        self.xLimitsBtn = widgets.Button(description='Update X',tooltip='Set X axis limits',layout=layout(110))
+        self.xLimitsMin = widgets.FloatText(value=-1,description='Min.',layout=layout(150),style={'description_width':'40px'})
+        self.xLimitsMax = widgets.FloatText(value=1,description='Max.',layout=layout(150),style={'description_width':'40px'})
+        self.yLimitsBtn = widgets.Button(description='Update Y',tooltip='Set Y axis limits',layout=layout(110))
+        self.yLimitsMin = widgets.FloatText(value=-1,description='Min.',layout=layout(150),style={'description_width':'40px'})
+        self.yLimitsMax = widgets.FloatText(value=1,description='Max.',layout=layout(150),style={'description_width':'40px'})
+        self.xLimitLock = widgets.ToggleButton(value=False,description='',icon='lock',tooltip='Lock X axis limits when loading new data',layout=layout(35))
+        self.yLimitLock = widgets.ToggleButton(value=False,description='',icon='lock',tooltip='Lock X axis limits when loading new data',layout=layout(35))
+
         # layouts
         self.h_new_filter_layout = HBox(children=[self.newFilterText,self.addFilterBtn])
         self.v_filter_layout = VBox(children=[self.filterSelection,self.h_new_filter_layout])
@@ -198,42 +231,90 @@ class spectrumBrowser():
         self.v_btn_layout = VBox(children=[self.h_selection_btn_layout,self.h_process_layout,self.cmapSelection,self.markerSelection])
         self.h_user_layout = HBox(children=[self.v_channel_layout,self.v_btn_layout])
 
-        self.v_settings_layout = VBox(children=[self.legendLabel,
-                                                self.legendText,
-                                                self.legendEntry,
-                                                HBox(children=[self.legendToggle,self.legendUpdate],layout=layout_h(150)),
-                                                self.titleLabel,
-                                                    self.titleToggle,
-                                                    self.nameToggle,
-                                                    self.setpointToggle,
-                                                    self.feedbackToggle,
-                                                    self.locationToggle,
-                                                    self.depthSelection,
-                                                    self.dateToggle,
-                                                    self.filterLabel,
-                                                    self.offsetToggle,
-                                                    self.offsetSize,
-                                                    self.svgToggle,
-                                                    self.svgSize,
-                                                    self.svgOrder,
-                                                    self.thresholdToggle,
-                                                    self.thresholdValue,
-                                                    self.averageToggle],
-                                                    layout=layout_h(180))
+        self.v_settings_layout = widgets.Accordion(children=[
+                                                    VBox(children=[
+                                                        HBox(children=[
+                                                            self.defaultLegendToggle,
+                                                            self.customLegendToggle],
+                                                            layout=layout(150)),
+                                                        self.legendText,
+                                                        self.legendEntry,
+                                                        HBox(children=[
+                                                            self.legendToggle,
+                                                            self.legendUpdate],
+                                                            layout=layout(150)),],
+                                                        layout=layout_h(180)),
+                                                    VBox(children=[
+                                                        self.titleToggle,
+                                                        self.nameToggle,
+                                                        self.setpointToggle,
+                                                        self.feedbackToggle,
+                                                        self.locationToggle,
+                                                        self.depthSelection,
+                                                        self.dateToggle,],
+                                                        layout=layout_h(180)),
+                                                    VBox(children=[
+                                                        self.offsetToggle,
+                                                        self.offsetSize,
+                                                        self.svgToggle,
+                                                        self.svgSize,
+                                                        self.svgOrder,
+                                                        HBox(children=[
+                                                            self.medFiltBtn,
+                                                            self.medFiltSize],
+                                                            layout=layout(150)),
+                                                        self.thresholdToggle,
+                                                        self.thresholdValue,
+                                                        self.averageToggle,
+                                                        self.groupSize],
+                                                        layout=layout_h(180)),
+                                                    VBox(children=[
+                                                        self.stmlToggle,
+                                                        self.plasmonReference],
+                                                        layout=layout_h(180)),
+                                                    VBox(children=[
+                                                        self.xLimitsMin,
+                                                        self.xLimitsMax,
+                                                        HBox(children=[
+                                                            self.xLimitsBtn,self.xLimitLock],
+                                                            layout=layout(150)),
+                                                        self.yLimitsMin,
+                                                        self.yLimitsMax,
+                                                        HBox(children=[
+                                                            self.yLimitsBtn,
+                                                            self.yLimitLock],
+                                                            layout=layout(150)),],
+                                                        layout=layout_h(180)),
+                                                    ],
+                                                    layout=layout_h(220),
+                                                    titles=['Legend Settings','Title Settings','Filter Settings','Plotting Modes','Axes Controls'])
 
         self.v_image_layout = VBox(children=[self.figure_display,self.h_user_layout])
         self.h_main_layout = HBox(children=[self.v_file_select_layout,self.v_image_layout,self.v_settings_layout])
 
         # connect widgets to functions
-        for child in self.v_settings_layout.children:
-            if type(child) == type(self.v_settings_layout):
+        self.groupSize.observe(self.update_legend_settings,names='value')
+        self.averageToggle.observe(self.update_legend_settings,names='value')
+        self.groupSize.observe(self.update_legend_mode,names='value')
+        for child in self.v_settings_layout.children[:-1]: # exclude axes control sliders
+            if type(child) == type(self.v_btn_layout):
                 for ch in child.children:
                     ch.observe(self.handler_settingsChange,names='value')
             child.observe(self.handler_settingsChange,names='value')
+
+        self.medFiltBtn.observe(self.redraw_image,names='value')
+        self.medFiltSize.observe(self.redraw_image,names='value')
+        
+        self.defaultLegendToggle.observe(self.update_legend_mode,names='value')
+        self.customLegendToggle.observe(self.update_legend_mode,names='value')
+        self.legendToggle.observe(self.handler_settingsChange,names='value')
         self.legendUpdate.on_click(self.update_legend_entry)
-        self.legendText.observe(self.update_legend_settings,names=['value'])
+
         self.settingsBtn.observe(self.handler_settingsDisplay,names='value')
-        #self.rootSelection.on_click(self.open_project)
+        
+        self.yLimitsBtn.on_click(self.handler_update_axes_limits)
+        self.xLimitsBtn.on_click(self.handler_update_axes_limits)
+
         self.saveBtn.on_click(self.save_figure)
         self.copyBtn.on_click(self.copy_figure)
         self.csvBtn.on_click(self.save_data)
@@ -257,19 +338,24 @@ class spectrumBrowser():
         self.orderParam.observe(self.handler_update_axes,names='value')
         self.offsetBtn.observe(self.handler_update_axes,names='value')
         self.offset_value.observe(self.handler_update_axes,names='value')
-        self.specRefBtn.observe(self.handler_update_axes,names='value')
-        self.specRefSelect.observe(self.changeReferenceSelection,names='value')
         self.cmapSelection.observe(self.handler_update_axes,names='value')
 
-        self.display()
+        self.stmlToggle.observe(self.handler_settingsChange,names='value')
+        self.plasmonReference.observe(self.handler_update_plasmonic_reference,names='value')
+
+
         with self.figure_display:
+            self.figure_display.clear_output(wait=True)
             plt.show(self.figure)
+
+        self.display()
         #with self.wfFigure_display:
             #plt.show(self.wfFigure)
         self.find_directories(self.active_dir)
         self.update_directories()
     # show browser
     def display(self):
+        #display.clear_output(wait=True)
         display.display(self.h_main_layout)
     
     def find_directories(self,_path):
@@ -364,14 +450,16 @@ class spectrumBrowser():
 
         #self.updateErrorText('finish load new image')
     def smooth_data(self,data):
-            window = self.svgSize.value
-            order = self.svgOrder.value
-            return savgol_filter(data,window,order)
-    def changeReferenceSelection(self,a):
-        if self.specRefBtn.value == True:
-            self.handler_update_axes(a)
-        else:
-            pass
+        window = self.svgSize.value
+        order = self.svgOrder.value
+        return savgol_filter(data,window,order)
+    def rebin_intensity_nm_to_ev(self,wavelengths,intensities):
+        center_energies = 1240 / wavelengths
+        delta_wavelengths = np.abs(np.diff(wavelengths))
+        delta_wavelengths = np.insert(delta_wavelengths,0,delta_wavelengths[0])
+        delta_energies = [1240/(w-dw)-1240/(w+dw) for w,dw in zip(wavelengths,delta_wavelengths)]
+        return center_energies,np.array([intensity/de for intensity,de in zip(intensities,delta_energies)]) # intensity / dE --> Counts / eV
+
     def update_image_data(self,filename=None):
         #self.updateErrorText('update image data')
         channelX = self.channelXSelect.value
@@ -408,6 +496,27 @@ class spectrumBrowser():
             spec_data,yunit = spec.get_channel(channelY[0])
             spec_x,xunit = spec.get_channel(channelX)
 
+        ## adjusting data for STML plotting mode
+        if self.stmlToggle.value and 'stml' in self.loaded_experiments[0].lower():
+            data = []
+            xx = []
+            for i,spec in enumerate(self.spec):
+                current = abs(np.average(spec.get_channel('I')[0]))
+                time = float(spec.header['Exposure Time [ms]'])/1000 # convert to seconds
+                charge = current * time
+                energies,intensities = self.rebin_intensity_nm_to_ev(self.spec_x[i],self.spec_data[i])
+                if self.plasmonReference.value != 'None' and self.plasmonInfo['file'] != None:
+                    plasmon = abs(self.plasmonInfo['interp'](energies))
+                    data.append(intensities/charge/plasmon*(plasmon>0)*(self.spec_data[i]>35)) # remove counts below 35 to avoid noise amplification
+                else:
+                    data.append(intensities/charge)
+                xx.append(energies) # convert from nm to eV
+            self.spec_data = data
+            self.spec_x = xx
+            self.spec_info[0]['x_unit'] = 'eV'
+            self.spec_info[0]['y_unit'] = 'cts/pC/eV'
+            self.spec_info[0]['x_label'] = 'Energy'
+
             return spec, spec_data, spec_x
         #self.updateErrorText('finish update image data')
     def update_scan_info(self):
@@ -434,7 +543,7 @@ class spectrumBrowser():
                 feedback_str = 'feedback on'
             elif fb_enable == 'OFF':
                 feedback_str = 'feedback off'
-            label.append(f'Exposure Time (s): {float(spec.header["Exposure Time [ms]"])/1000:.0f}, $\lambda_c$: {spec.header["Center Wavelength [nm]"]}, grating: {spec.header["Selected Grating"]}')
+            label.append(fr'Exposure Time (s): {float(spec.header["Exposure Time [ms]"])/1000:.0f}, $\lambda_c$: {spec.header["Center Wavelength [nm]"]}, grating: {spec.header["Selected Grating"]}')
             setpoint_str = 'setpoint: I = %.0f%s, V = %.1f%s' % (set_point+bias)  
         if 'bias spectroscopy' in experiment:
             fb_enable = spec.get_param('Z-Ctrl hold')
@@ -500,14 +609,18 @@ class spectrumBrowser():
         if self.dateToggle.value:
             label.append(date_str)
         if self.svgToggle.value:
-            label.append(f'Savitzky-Golay Filter $\\rightarrow$ Window: {self.windowParam.value}, Order: {self.orderParam.value}')
+            label.append(f'Savitzky-Golay Filter $\\rightarrow$ Window: {self.svgSize.value}, Order: {self.svgOrder.value}')
         #label.append('comment: %s' % comment)
         if self.titleToggle.value:
             self.spec_label = '\n'.join(label)
         else:
             self.spec_label = ''
         #self.updateErrorText('finish update scan info')
+    #########################
+    ### plotting function ###
+    #########################
     def update_axes(self):
+        print('update axes called')
         #self.updateErrorText('update axes')
         if not self.figure:
             self.updateErrorText('making new figure/axes')
@@ -518,52 +631,94 @@ class spectrumBrowser():
             self.cb.remove()
             self.cb = None
         ax.clear()
-        colors = plt.cm.get_cmap(str(self.cmapSelection.value))(np.linspace(0,1,len(self.spec_data)))
-        #print(len(self.spec_data),len(self.labels))
+
+        if self.axes2 != None:
+            self.axes2.remove()
+            self.axes2 = None
 
         y_values = self.spec_data
-        for i in range(len(self.spec_data)):
-            y = self.spec_data[i]
+        x_values = self.spec_x
+        if self.averageToggle.value and len(self.spec_data) % self.groupSize.value == 0:
+            x_values,y_values = self.group_average()
+
+        for i in range(len(y_values)):
+            y = y_values[i]
             offset = 0
             if self.fixZeroBtn.value:
-                offset = np.mean(self.spec_data[i][np.where(abs(self.spec_x[i])<0.1)[0]])
+                offset = np.mean(self.spec_data[i][np.where(abs(x_values[i])<0.1)[0]])
             if self.thresholdToggle.value:
                 y *= (y < self.thresholdValue.value)
             if self.svgToggle.value:
                 y = self.smooth_data(y)
+            if self.medFiltBtn.value:
+                y = medfilt(y,self.medFiltSize.value)
             if self.flattenBtn.value:
                 y = y / np.max(y)
             if self.offsetToggle.value:
                 y = y + i*self.offsetSize.value
             y_values[i] = y
 
-        if self.averageToggle.value and len(self.spec_data) >= 3:
-            y = []
-            for el in zip(*y_values):
-                nel = el*(el<np.quantile(el,.99))
-                filtered = [l for l in nel if l != 0]
-                if len(filtered) != 0:
-                    averaged = np.average(filtered)
-                else:
-                    averaged = 0
-                y.append(averaged)
-            y_values = [np.array(y)]
+        if self.defaultLegendToggle.value:
+            if self.averageToggle.value and len(self.spec_data) % self.groupSize.value == 0:
+                labels = [self.labels[i] for i in range(0, len(self.labels), self.groupSize.value)]
+            else:
+                labels = self.labels
+        elif self.customLegendToggle.value:
+            labels = self.legendText.options
 
+        colors = plt.cm.get_cmap(str(self.cmapSelection.value))(np.linspace(0,1,len(y_values)))
         for i in range(len(y_values)):
-                ax.plot(self.spec_x[i],y_values[i],color=colors[i],label=self.labels[i])
+                ax.plot(x_values[i],y_values[i],color=colors[i],label=labels[i])
 
         ax.set_title(self.spec_label,fontsize=self.titlesize,loc='left')
         ax.set_xlabel(f'{self.spec_info[0]["x_label"]} ({self.spec_info[0]["x_unit"]})',fontsize=self.fontsize)
         ax.set_ylabel(f'{self.channelYSelect.value[0]} ({self.spec_info[0]["y_unit"]})',fontsize=self.fontsize)
+        ax.xaxis.set_minor_locator(AutoMinorLocator(2))
+        ax.yaxis.set_minor_locator(AutoMinorLocator(2))
+        ax.tick_params(axis="y",which='both',direction="in",)
+        ax.tick_params(axis="x",which='both',direction="in",)
+
         if self.legendToggle.value:
-            if len(self.spec_data) > 3:
-                ax.legend(bbox_to_anchor=(1.01, 1),draggable=True,labels=self.legendText.options)
-            else:
-                ax.legend(draggable=True,labels=self.legendText.options)
+            if len(self.axes.lines) < 4:
+                fontsize = self.legendFontsize[0]
+            elif len(self.axes.lines) < 16:
+                fontsize = self.legendFontsize[1]
+            elif len(self.axes.lines) >= 16:
+                fontsize = self.legendFontsize[2]
+            ax.legend(draggable=True,fontsize=fontsize,frameon=False)
         else:
             pass
-    
-        self.figure.tight_layout(pad=2)
+
+        # add secondary axis for STML mode
+        if self.stmlToggle.value and 'stml' in self.loaded_experiments[0].lower():
+            xmin, xmax, ymin, ymax = self.axes.axis()
+            if self.axes2 != None:
+                self.axes2.remove()
+                self.axes2 = None
+            self.axes2 = ax.twiny()
+            self.axes2.set_xlabel('Wavelength (nm)',fontsize=self.fontsize)
+            self.axes2.set_xscale('function',functions=(lambda en: 1240/(en+1e-9),lambda lam: 1240/(lam+1e-9)))
+            for i in range(len(self.spec_data)):
+                energy = self.spec_x[i][np.where((self.spec_x[i]>=xmin) & (self.spec_x[i]<=xmax))]
+                self.axes2.plot(1240/energy,energy,alpha=0)
+            self.axes2.xaxis.set_minor_locator(AutoMinorLocator(2))
+            self.axes2.tick_params(axis="x",which='both',direction="in",)
+            #self.axes2.tick_params(axis="y",direction="in",)
+            self.axes2.set_zorder(ax.get_zorder()-1)
+            self.axes2.xaxis.set_zorder(ax.xaxis.get_zorder()+1)
+            self.axes.set_ylim(ymin,ymax)
+
+        self.updateAxesLimitSliders()
+
+        if self.xLimitLock.value:
+            self.axes.set_xlim(self.xLimitsMin.value,self.xLimitsMax.value)
+            self.axes2.set_xlim(1240/self.xLimitsMax.value,1240/self.xLimitsMin.value)
+        if self.yLimitLock.value:
+            self.axes.set_ylim(self.yLimitsMin.value,self.yLimitsMax.value)
+
+        self.figure.tight_layout(pad=1)
+        ## secondardy function calls
+        
         #self.updateErrorText('finish update axes')
 
 ### alternate functions
@@ -616,16 +771,23 @@ class spectrumBrowser():
             ipy,ipx = self.sxmBrowser.image_data[~np.isnan(self.sxmBrowser.image_data).any(axis=1)].shape
             height = self.sxmBrowser.img.get_param('height')[0]
             rel_positions = []
-            colors = plt.cm.jet(np.linspace(0,1,len(self.spec)))
-            colors = plt.cm.get_cmap(self.cmapSelection.value)(np.linspace(0,1,len(self.spec)))
+            colors = plt.cm.get_cmap(self.cmapSelection.value)(np.linspace(0,1,len(self.axes.lines)))
+            k = 0
             for i,spec in enumerate(self.spec):
+                # skip spectra for averaging display
+                if self.averageToggle.value and len(self.spec_data) % self.groupSize.value == 0:
+                    indices = list(range(0, len(self.spec), self.groupSize.value))
+                    if i not in indices:
+                        continue
+                
                 rx,ry = self.relative_position(self.sxmBrowser.img,spec)
                 rel_positions.append([rx,ry])
                 if self.markerSelection.value != 'N':
-                    ax.plot(rx,ry,marker=self.markerSelection.value,markersize=10,color=colors[i],label=self.labels[i].split('.')[0][-3:])
+                    ax.plot(rx,ry,marker=self.markerSelection.value,markersize=10,color=colors[k],label=self.labels[k].split('.')[0][-3:])
                 elif self.markerSelection.value == 'N':
                     start = np.max(self.spec_index)-np.min(self.spec_index)+1
                     ax.text(rx,ry,f'{start-i}',color='r',fontsize=10,ha='center',va='center')
+                k += 1
 
     def plot2D(self,a):
         if len(self.spec) != 0:
@@ -651,7 +813,7 @@ class spectrumBrowser():
             vmax = np.max(dataArray)
             #print(yLabels)
             self.axes.clear()
-            axesImage = self.axes.imshow(dataArray,aspect='auto',origin='lower',extent=[np.min(xData),np.max(xData),ymin,ymax],cmap=self.cmapSelection.value)
+            axesImage = self.axes.imshow(dataArray,aspect='auto',origin='lower',extent=[np.min(xData),np.max(xData),ymin,ymax],cmap=self.cmapSelection.value,interpoolation='none')
             self.axes.set_ylabel(ylabel)
             self.axes.set_xlabel(f'{self.spec_info[0]["x_label"]} ({self.spec_info[0]["x_unit"]})')
             if not self.cb:
@@ -666,12 +828,28 @@ class spectrumBrowser():
             
         else:
             pass
-        
+    def group_average(self):
+        group_size = self.groupSize.value
+        data = self.spec_data # list of arrays
+        xx = self.spec_x
+        grouped_data = [data[i:i + group_size] for i in range(0, len(data), group_size)]
+        grouped_x = [xx[i] for i in range(0, len(xx), group_size)]
+        group_averaged = []
+        for group in grouped_data:
+            median_average = []
+            for element_group in zip(*group):
+                medians = np.sort(medfilt(element_group,3))
+                medians = medians[0:-1] # remove max
+                median_average.append(np.average(medians))
+            group_averaged.append(np.array(median_average))
+        return grouped_x,group_averaged
+
 ### display configuration
     def updateDisplayImage(self,*params):
         #self.updateErrorText('update display image')
         self.update_axes()
         #self.figure.canvas.set_window_title(self.img.name.split('.')[0])
+        self.figure_display.clear_output(wait=True)
         self.figure.canvas.draw()
         #self.updateErrorText('finish update display image')
     def updateInfoText(self):
@@ -717,9 +895,18 @@ class spectrumBrowser():
         else:
             self.spec_index -= 1
             self.updateInfoText()
+    def updateAxesLimitSliders(self):
+        xmin,xmax,ymin,ymax = self.axes.axis()
+        if not self.xLimitLock.value:
+            self.xLimitsMin.value = xmin
+            self.xLimitsMax.value = xmax
+        if not self.yLimitLock.value:   
+            self.yLimitsMin.value = ymin
+            self.yLimitsMax.value = ymax
 ### settings handler
     def handler_settingsChange(self,a):
-        self.redraw_image(a)
+        if a['owner'] != self.selectionList:
+            self.redraw_image(a)
 
     def handler_settingsDisplay(self,a):
         if self.settingsBtn.value:
@@ -737,23 +924,37 @@ class spectrumBrowser():
                         ch.layout.visibility = 'hidden'
                 child.layout.visibility = 'hidden'
 
+    def update_legend_mode(self,a):
+        print(a)
+        if a['owner'] == self.defaultLegendToggle and a['new'] == True:
+            self.customLegendToggle.value = False
+        elif a['owner'] == self.customLegendToggle and a['new'] == True:
+            self.defaultLegendToggle.value = False
+        elif a['owner'] == self.groupSize:
+            # set legend mode to default if group averaging is not configured properly
+            if self.averageToggle.value and len(self.spec_data) % self.groupSize.value != 0:
+                self.defaultLegendToggle.value = True
+                self.customLegendToggle.value = False
+        self.updateDisplayImage(a)
     def update_legend_entry(self,a):
         entry = self.legendText.value
         options = list(self.legendText.options)
         index = options.index(entry)
         new_text = self.legendEntry.value
-        if new_text not in ['',None]:
-            labels = self.axes.__dict__['legend_'].get_texts()
-            labels[index].set_text(new_text)
-            options[index] = new_text
-            self.legendText.options = options
+        options[index] = new_text
+        self.legendText.options = options
+        self.updateDisplayImage(a)
     def update_legend_settings(self,a):
-        if a['owner'] == self.selectionList:
-            new_selection = a['new']
+        if a['owner'] == self.selectionList or a['owner'] == self.averageToggle or a['owner'] == self.groupSize:
+            new_selection = self.selectionList.value
+            if self.averageToggle.value and len(self.spec_data) % self.groupSize.value == 0:
+                new_selection = self.selectionList.value
+                grouped_selection = [new_selection[i] for i in range(0, len(new_selection), self.groupSize.value)]
+                new_selection = grouped_selection
             self.legendText.options = new_selection
             self.legendText.value = new_selection[0]
-        if a['owner'] == self.legendText:
-            self.legendEntry.value = a['new']
+#        if a['owner'] == self.legendText:
+#            self.legendEntry.value = a['new']
 ### Selection update
     def handler_folder_selection(self,a):
         index=0
@@ -776,7 +977,6 @@ class spectrumBrowser():
         self.dat_files = [f[0] for f in sorted(files, key=lambda x: x[1], reverse=True)]
         self.all_files = self.sxm_files + self.dat_files
         self.selectionList.options = self.dat_files
-        self.specRefSelect.options = [None]+list(self.dat_files)
         if len(self.dat_files) != 0:
             if type(index) == int:
                 self.filenameText.value = self.dat_files[index]
@@ -784,6 +984,9 @@ class spectrumBrowser():
                 self.filenameText.value = self.dat_files[index[0]]
             if self.filenameText.value in self.selectionList.options:
                 self.selectionList.value = [self.filenameText.value]
+            self.plasmonReference.options = ['None'] + [f for f in self.dat_files if 'stml' in f.lower()]
+            self.plasmonReference.value = 'None'
+
         #print(self.dat_files)
     def handler_file_selection(self,update:object):
         #self.updateErrorText(str(update))
@@ -791,12 +994,14 @@ class spectrumBrowser():
         try:
             if len(self.selectionList.value) > 0:
                 self.load_new_image()
+                self.update_legend_settings(update)
                 self.updateDisplayImage()
+                #
         except Exception as err:
             self.updateErrorText('file selection error:' + str(err))
             print(traceback.format_exc())
 
-        self.update_legend_settings(update)
+        #self.update_legend_settings(update)
 
     def handler_channel_selection(self,update):
         try:
@@ -812,10 +1017,36 @@ class spectrumBrowser():
             options.append(self.newFilterText.value)
             self.filterSelection.options = options
             self.newFilterText.value = ''
+    def handler_update_plasmonic_reference(self,update):
+        if self.plasmonReference.value != 'None':
+            directory = self.directories[self.directorySelection.index]
+            if directory != self.active_dir:
+                directory = os.path.join(self.active_dir,directory)
+            if self.plasmonReference.value in self.dat_files:
+                reference_spec = Spm(os.path.join(directory,self.plasmonReference.value))
+                reference_y, yunit = reference_spec.get_channel('Intensity')
+                reference_x, xunit = reference_spec.get_channel('Wavelength')
+            
+                reference_y = abs(savgol_filter(reference_y,21,1))
+                reference_y *= (reference_y > 35) # 2x noise floor + a little extra
+                #reference_y += 1e-2*np.max(reference_y)
+                reference_y /= np.max(reference_y)
+                ref_data_interp = interp1d(1240/reference_x,reference_y,bounds_error=False,fill_value=0.0) # interpolated on energy axis
+                self.plasmonInfo['spm'] = reference_spec
+                self.plasmonInfo['file'] = self.plasmonReference.value
+                self.plasmonInfo['interp'] = ref_data_interp
+                
 ### data presentation update
     def handler_update_axes(self,a):
         self.update_scan_info()
         self.update_axes()
+        #self.updateDisplayImage(a)
+    def handler_update_axes_limits(self,a):
+        if a == self.xLimitsBtn:
+            self.axes.set_xlim(self.xLimitsMin.value,self.xLimitsMax.value)
+            self.axes2.set_xlim(1240/self.xLimitsMax.value,1240/self.xLimitsMin.value)
+        elif a == self.yLimitsBtn:
+            self.axes.set_ylim(self.yLimitsMin.value,self.yLimitsMax.value)
 ### misc
     def make_figure(self,figsize=(7,5),cols=1):
         try:
@@ -827,3 +1058,6 @@ class spectrumBrowser():
         if cols != 1:
             self.axs = self.axes[1:]
             self.axes = self.axes[0]
+
+# execution pattern for certain features
+# 

@@ -16,7 +16,6 @@ Classes:
 
 import ipywidgets as widgets
 from IPython import display
-from skimage import filters
 from scipy.ndimage import gaussian_filter, median_filter, gaussian_laplace
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
@@ -198,6 +197,7 @@ class imageBrowser():
 
         self.display()
         with self.figure_display:
+            self.figure_display.clear_output(wait=True)
             plt.show(self.figure)
         self.find_directories(self.active_dir)
         self.update_directories()
@@ -206,6 +206,7 @@ class imageBrowser():
         #self.updateErrorText('finish startup')
     # show browser
     def display(self):
+        display.clear_output(wait=True)
         display.display(self.mainlayout)
     def find_directories(self,_path):
         directories = []
