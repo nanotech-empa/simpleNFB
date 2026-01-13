@@ -501,15 +501,18 @@ class spectrumBrowser():
             data = []
             xx = []
             for i,spec in enumerate(self.spec):
-                current = abs(np.average(spec.get_channel('I')[0]))
+                current = abs(np.average(spec.get_channel('I')[0])) # in pA
                 time = float(spec.header['Exposure Time [ms]'])/1000 # convert to seconds
+                dt = time / len(self.spec_data[i])
+                dq = abs(spec.get_channel('I')[0]) * dt # in pC
+                q = np.sum(dq) # total charge in pC
                 charge = current * time
                 energies,intensities = self.rebin_intensity_nm_to_ev(self.spec_x[i],self.spec_data[i])
                 if self.plasmonReference.value != 'None' and self.plasmonInfo['file'] != None:
                     plasmon = abs(self.plasmonInfo['interp'](energies))
-                    data.append(intensities/charge/plasmon*(plasmon>0)*(self.spec_data[i]>35)) # remove counts below 35 to avoid noise amplification
+                    data.append(intensities/q/plasmon*(plasmon>0)*(self.spec_data[i]>35)) # remove counts below 35 to avoid noise amplification
                 else:
-                    data.append(intensities/charge)
+                    data.append(intensities/q)
                 xx.append(energies) # convert from nm to eV
             self.spec_data = data
             self.spec_x = xx
