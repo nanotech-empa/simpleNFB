@@ -873,7 +873,7 @@ class spectrumBrowser():
             elif default_channels[0] != None:
                 self.channelXSelect.value = default_channels[0]
             else:
-                self.channelXSelect.value = ['Index']
+                self.channelXSelect.value = 'Index'
             if self.current_experiment == self.loaded_experiments[0] and current_value_Y in self.spec[0].channels:
                 self.channelYSelect.value = [current_value_Y]
             elif default_channels[1] != None:
