@@ -19,6 +19,8 @@ from IPython import display
 from scipy.ndimage import gaussian_filter, median_filter, gaussian_laplace
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
+from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
+from matplotlib.font_manager import FontProperties as fm
 import numpy as np
 import traceback
 import subprocess
@@ -69,10 +71,12 @@ class imageBrowser():
         self.img = None
         self.figure,self.axes = plt.subplots(ncols=1,figsize=figsize,num='sxm') # simple default figure size
         self.fontsize = fontsize
+        self.font = fm(size=fontsize,family='sans-serif')
         self.titlesize = titlesize
         self.cb = None
         self.image_data = np.zeros((64,64)) # 64 x 64 pixel zeros
         self.image_info = {'height':1,'width':1,'unit':'nm'}
+        self.scan_dict = {}
         self.scan_info = ''
         self.errors = []
         self.image_index = 0
@@ -118,10 +122,22 @@ class imageBrowser():
         self.vmin = widgets.FloatText(value=0,description='Min:',step=.1,layout=layout(180))
         self.vmax = widgets.FloatText(value=1,description='Max:',step=.1,layout=layout(180))
         self.cmapSelection = widgets.Dropdown(description='colormap:',options=plt.colormaps(),value=cmap,layout=layout(180))
-        # figure title options
-        self.titleOptionBtn = widgets.ToggleButton(description='',icon='gear',value=False,tooltip='Display figure title options panel',layout=layout(30))
-        self.titleLabel = widgets.Label(value='Figure Title Settings',layout=layout_h(150))
+        # figure display toggles
+        ### show title
+        self.configOptionBtn = widgets.ToggleButton(description='',icon='gear',value=False,tooltip='Display options panel',layout=layout(30))
         self.titleToggle = widgets.ToggleButton(value=True, description='Show Title',tooltip='Toggle figure title',layout=layout_h(150))
+        self.labelToggle = widgets.ToggleButton(value=False, description='Show Labels',tooltip='Toggle figure laels',layout=layout_h(150))
+
+        ### show info labels
+        self.labelLabel = widgets.Label(value='Figure Label Settings',layout=layout_h(150))
+        self.upperLeftSelect = widgets.Dropdown(value='bias',options=['none','channel','bias','setpoint','feedback','date','filename','scalebar'],description='UL:',layout=layout_h(150),style={'description_width':'40px'})
+        self.upperRightSelect = widgets.Dropdown(value='filename',options=['none','channel','bias','setpoint','feedback','date','filename','scalebar'],description='UR:',layout=layout_h(150),style={'description_width':'40px'})
+        self.lowerLeftSelect = widgets.Dropdown(value='none',options=['none','channel','bias','setpoint','feedback','date','filename','scalebar'],description='LL:',layout=layout_h(150),style={'description_width':'40px'})
+        self.lowerRightSelect = widgets.Dropdown(value='scalebar',options=['none','channel','bias','setpoint','feedback','date','filename','scalebar'],description='LR:',layout=layout_h(150),style={'description_width':'40px'})
+        self.labelColorSelect = widgets.ColorPicker(concise=True,description='Color:',value='orange',layout=layout_h(150),style={'description_width':'40px'})
+
+        # figure title options
+        self.titleLabel = widgets.Label(value='Figure Title Settings',layout=layout_h(150))
         self.channelToggle = widgets.ToggleButton(value=True,description='channel',layout=layout_h(150))
         self.setpointToggle = widgets.ToggleButton(value=True,description='Setpoint',layout=layout_h(150))
         self.feedbackToggle = widgets.ToggleButton(value=True,description='Feedback',layout=layout_h(150))
@@ -130,6 +146,7 @@ class imageBrowser():
         self.nameToggle = widgets.ToggleButton(value=True,description='Filename',layout=layout_h(150))
         self.directionToggle = widgets.ToggleButton(value=True,description='Direction',layout=layout_h(150))
         self.dateToggle = widgets.ToggleButton(value=True,description='Date',layout=layout_h(150))
+
         # image filter settings
         self.filterLabel = widgets.Label(value='Image Filter Settings',layout=layout_h(150))
         self.gaussianToggle = widgets.ToggleButton(value=False,description='Gaussian',layout=layout_h(90))
@@ -142,15 +159,22 @@ class imageBrowser():
         self.planeFitToggle = widgets.ToggleButton(value=False,description='Plane Fit',tooltip='plane subtraction')
 
         # layouts
-        self.h_selection_btn_layout = HBox(children=[self.refreshBtn,self.previousBtn,self.nextBtn,self.saveBtn,self.copyBtn,self.titleOptionBtn])
+        self.h_selection_btn_layout = HBox(children=[self.refreshBtn,self.previousBtn,self.nextBtn,self.saveBtn,self.copyBtn,self.configOptionBtn])
         self.h_process_btn_layout = HBox(children=[self.directionBtn,self.fixZeroBtn,self.linebylineBtn,self.flattenBtn,self.invertBtn])
         self.v_text_layout = VBox(children=[self.channelSelect,self.saveNote])
         self.v_btn_layout = VBox(children=(self.h_selection_btn_layout,self.h_process_btn_layout))
         self.v_color_layout = VBox(children=(self.cmapSelection,self.vmin,self.vmax))
         self.h_user_layout = HBox(children=[self.v_text_layout,self.v_btn_layout,self.v_color_layout])
         self.v_file_layout = VBox(children=[self.directorySelection,self.selectionList])
-        self.v_settings_layout = VBox(children=[self.titleLabel,
-                                             self.titleToggle,
+        self.v_settings_layout = VBox(children=[self.titleToggle,
+                                                self.labelToggle,
+                                                self.labelLabel,
+                                                self.upperLeftSelect,
+                                                self.upperRightSelect,
+                                                self.lowerLeftSelect,
+                                                self.lowerRightSelect,
+                                                self.labelColorSelect,
+                                                self.titleLabel,
                                              self.channelToggle,
                                              self.setpointToggle,
                                              self.feedbackToggle,
@@ -190,7 +214,7 @@ class imageBrowser():
         self.vmin.observe(self.updateDisplayImage,names='value')
         self.vmax.observe(self.updateDisplayImage,names='value')
         self.copyBtn.on_click(self.copy_figure)
-        self.titleOptionBtn.observe(self.handler_titleOptionsDisplay,names='value')
+        self.configOptionBtn.observe(self.handler_configOptionsDisplay,names='value')
 
         # mpl events
         #self.figure.canvas.mpl_connect('button_press_event',self.mouse_click)
@@ -350,6 +374,11 @@ class imageBrowser():
 
             self.image_info['width'] = width[0]
             self.image_info['height'] = height[0]
+            self.scan_dict['feedback'] = fb_enable
+            self.scan_dict['setpoint'] = set_point
+            self.scan_dict['size'] = (width,height,angle)
+            self.scan_dict['z_offset'] = z_offset
+            self.scan_dict['comment'] = comment
 
             if fb_enable == 'OFF':
                 mode = 'Constant Height $\\rightarrow$ z-offset: %.3f%s' % z_offset
@@ -363,6 +392,8 @@ class imageBrowser():
                 bias[0] = bias[0]*1000
                 bias[1] = 'mV'
                 bias = tuple(bias)
+            self.scan_dict['bias'] = bias
+
             #label.append(f'channel: {self.channelSelect.value}')
             if self.channelToggle.value:
                 if self.feedbackToggle.value:
@@ -371,10 +402,7 @@ class imageBrowser():
                     label.append(f'channel: {self.channelSelect.value}')
             if self.setpointToggle.value:
                 label.append(f'setpoint: I = {set_point[0]:.0f}{set_point[1]}, V = {bias[0]:.2f}{bias[1]}')
-            #label.append('I = %.0f%s' % set_point)  
-            #label.append('bias = %.2f%s' % bias)
-            #label.append('size: %.1f%s x %.1f%s (%.0f%s)' % (width+height+angle))
-            #label.append('comment: %s' % comment)
+
             if self.locationToggle.value:
                 location = self.directories[self.directorySelection.index]
                 if self.depthSelection.value == 'full':
@@ -382,6 +410,7 @@ class imageBrowser():
                 else:
                     location = '\\'.join(str(location).split('\\')[-int(self.depthSelection.value):])
                 label.append(f'location: {location}') #dat files use header['Saved Date']
+
             if self.nameToggle.value:
                 if self.directionToggle.value:
                     direction = {True:'backward',False:'forward'}[self.directionBtn.value]
@@ -389,14 +418,19 @@ class imageBrowser():
                 else:
                     name_str = f'filename: {self.img.name}'
                 label.append(name_str)
+            self.scan_dict['filename'] = self.img.name
+
             if self.dateToggle.value:
                 label.append(f'Date: {self.img.header["rec_date"]} {self.img.header["rec_time"]}')
-        #label.append('path: %s' % self.img.path)
+
+            self.scan_dict['date'] = f'{self.img.header["rec_date"]} {self.img.header["rec_time"]}'
+
         if self.titleToggle.value:
             self.scan_info = '\n'.join(label)
         else:
             self.scan_info = ''
         #self.updateErrorText('finish update scan info')
+
     def update_axes(self):
         #self.updateErrorText('update axes')
         if not self.figure:
@@ -432,6 +466,76 @@ class imageBrowser():
         ax.set_yticks([0,h])
         ax.set_xticklabels([0,round(w,2)],fontsize=self.fontsize)
         ax.set_yticklabels([0,round(h,2)],fontsize=self.fontsize)
+        if self.labelToggle.value:
+            ax.axis('off')
+            self.addFigureLabels()
+        else:
+            ax.axis('on')
+    def addFigureLabels(self):
+        color = self.labelColorSelect.value
+        ax = self.axes
+        w = ax.get_xlim()[1]
+        h = ax.get_ylim()[1]
+        label_positions = {
+            'upper left': (0.03*w,0.97*h,'upper left'),
+            'upper right': (0.97*w,0.97*h,'upper right'),
+            'lower left': (0.03*w,0.03*h,'lower left'),
+            'lower right': (0.97*w,0.03*h,'lower right')
+        }
+        selections = {
+            'upper left': self.upperLeftSelect.value,
+            'upper right': self.upperRightSelect.value,
+            'lower left': self.lowerLeftSelect.value,
+            'lower right': self.lowerRightSelect.value
+        }
+        for position in label_positions.keys():
+            x_pos,y_pos,align = label_positions[position]
+            selection = selections[position]
+            if selection == 'none':
+                continue
+            elif selection == 'channel':
+                text = f'{self.channelSelect.value}'
+            elif selection == 'bias':
+                bias = self.scan_dict.get('bias',('N/A',''))
+                text = f'{bias[0]}{bias[1]}'
+            elif selection == 'setpoint':
+                setpoint = self.scan_dict.get('setpoint','N/A')
+                text = f'{setpoint}'
+            elif selection == 'feedback':
+                feedback = self.scan_dict.get('feedback','N/A')
+                text = f'{feedback}'
+            elif selection == 'date':
+                date = self.scan_dict.get('date','N/A')
+                text = f'{date}'
+            elif selection == 'filename':
+                filename = self.scan_dict.get('filename','N/A')
+                text = f'{filename}'
+            elif selection == 'scalebar':
+                image_width = self.image_info['width'] # in nm
+                target_length = 0.20 # % of image width
+                initial_scalebar_length = image_width * target_length
+                # round to nearest standard value
+                standard_lengths = [.1,.2,.5,1,2,5,10,20,50,100,200,500,1000,2000,5000] # in nm
+                scalebar_length = min(standard_lengths, key=lambda x: abs(x-initial_scalebar_length))
+                actual_length_per = scalebar_length / image_width # percent
+                if scalebar_length < 1:
+                    scalebar_length *= 10
+                    unit = 'Å'
+                else:
+                    unit = 'nm'
+                label = f'{scalebar_length} {unit}'
+                scalebar = AnchoredSizeBar(ax.transAxes, actual_length_per,label,align,frameon = False,color=color,sep=-int(15*self.fontsize/12),pad=1,fontproperties=self.font,size_vertical=0.1/self.fontsize)
+                ax.add_artist(scalebar)
+                continue
+            # add text to axes
+            if align == 'upper left':
+                ax.text(x_pos,y_pos,text,fontsize=self.fontsize,verticalalignment='top',horizontalalignment='left',color=color,alpha=0.7) #,backgroundcolor='black'
+            elif align == 'upper right':
+                ax.text(x_pos,y_pos,text,fontsize=self.fontsize,verticalalignment='top',horizontalalignment='right',color=color,alpha=0.7)
+            elif align == 'lower left':
+                ax.text(x_pos,y_pos,text,fontsize=self.fontsize,verticalalignment='bottom',horizontalalignment='left',color=color,alpha=0.7)
+            elif align == 'lower right':
+                ax.text(x_pos,y_pos,text,fontsize=self.fontsize,verticalalignment='bottom',horizontalalignment='right',color=color,alpha=0.7)
         #self.updateErrorText('finish update axes')
     # display configuration
     def updateDisplayImage(self,*params):
@@ -478,8 +582,8 @@ class imageBrowser():
     def handler_settingsChange(self,a):
         self.redraw_image(a)
 
-    def handler_titleOptionsDisplay(self,a):
-        if self.titleOptionBtn.value:
+    def handler_configOptionsDisplay(self,a):
+        if self.configOptionBtn.value:
             self.v_settings_layout.layout.visibility = 'visible'
             for child in self.v_settings_layout.children:
                 if type(child) == type(self.v_settings_layout):

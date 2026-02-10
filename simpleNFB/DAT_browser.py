@@ -127,7 +127,7 @@ class spectrumBrowser():
         self.newFilterText = widgets.Text(description='New Filter',tooltip='user defined string to use for file filtering',layout=layout(200))
         self.addFilterBtn = widgets.Button(description='+',tooltip='click to add new filter to selection',layout=layout(30))
     
-        self.channelXSelect = widgets.Dropdown(options=[None],value=None,description='X:')
+        self.channelXSelect = widgets.Dropdown(options=['Index'],value=None,description='X:')
         self.channelYSelect = widgets.SelectMultiple(options=[None],value=[None],description='Y:',rows=5)
 
         #self.channelXSelect = widgets.Dropdown(options=['V'],value='V',description='X:')
@@ -206,8 +206,11 @@ class spectrumBrowser():
         self.groupSize = widgets.BoundedIntText(description='Group:',value=3,min=3,max=20,step=1,tooltip='defines the group size used in batched averaging',layout=layout(150))
         # plotting modes settings
         self.stmlToggle = widgets.ToggleButton(value=False,description='STML Mode',tooltip='Convert bottom axis to energy\nadd top axis in wavelength\nscale intensity to current x time',layout=layout(150))
-        self.plasmonReference = widgets.Dropdown(options=['None'],value='None',description='Plasmon:',layout=layout(150))
-
+        self.normalizeTimeBtn = widgets.ToggleButton(value=True,description='Norm. Time',tooltip='Normalize intensity to current x time',layout=layout(150))
+        self.normalizeCurrentBtn = widgets.ToggleButton(value=True,description='Norm. Current',tooltip='Normalize intensity to current x current',layout=layout(150))
+        self.normalizeEnergyBtn = widgets.ToggleButton(value=True,description='Norm. Energy',tooltip='Normalize intensity to current x energy',layout=layout(150)) 
+        self.normalizePlasmonBtn = widgets.ToggleButton(value=False,description='Norm. Plasmon',tooltip='Normalize intensity to plasmon intensity',layout=layout(150))
+        self.plasmonReference = widgets.Dropdown(options=['None'],value='None',description='Plasmon:',layout=layout(150),style={'description_width':'40px'})
         # axes controls
         self.xLimitsBtn = widgets.Button(description='Update X',tooltip='Set X axis limits',layout=layout(110))
         self.xLimitsMin = widgets.FloatText(value=-1,description='Min.',layout=layout(150),style={'description_width':'40px'})
@@ -270,6 +273,10 @@ class spectrumBrowser():
                                                         layout=layout_h(180)),
                                                     VBox(children=[
                                                         self.stmlToggle,
+                                                        self.normalizeTimeBtn,
+                                                        self.normalizeCurrentBtn,
+                                                        self.normalizeEnergyBtn,
+                                                        self.normalizePlasmonBtn,
                                                         self.plasmonReference],
                                                         layout=layout_h(180)),
                                                     VBox(children=[
@@ -287,7 +294,7 @@ class spectrumBrowser():
                                                         layout=layout_h(180)),
                                                     ],
                                                     layout=layout_h(220),
-                                                    titles=['Legend Settings','Title Settings','Filter Settings','Plotting Modes','Axes Controls'])
+                                                    titles=['Legend Settings','Title Settings','Filter Settings','STML Mode','Axes Controls'])
 
         self.v_image_layout = VBox(children=[self.figure_display,self.h_user_layout])
         self.h_main_layout = HBox(children=[self.v_file_select_layout,self.v_image_layout,self.v_settings_layout])
@@ -352,7 +359,7 @@ class spectrumBrowser():
         #with self.wfFigure_display:
             #plt.show(self.wfFigure)
         self.find_directories(self.active_dir)
-        self.update_directories()
+        #self.update_directories()
     # show browser
     def display(self):
         #display.clear_output(wait=True)
@@ -370,10 +377,18 @@ class spectrumBrowser():
             pass
         self.directories.extend(directories)
         return directories
+    def find_directories(self,_path):
+        exclude_folders = ['browser_outputs', 'ipynb', 'spmpy', '__pycache__', 'raw_stml_data']
+        session_directories = [x for x in next(os.walk(self.active_dir))[1] if x not in exclude_folders]
+        sub_directories = dict(zip(session_directories, [[d for d in next(os.walk(os.path.join(self.active_dir,x)))[1] if d not in exclude_folders] for x in session_directories]))
+        self.directories = session_directories
+        self.update_directories()
     def update_directories(self):
         display_directories = ['\\'.join(str(directory).split('\\')[-1:]) for directory in self.directories]
-        display_directories[0] = f'(active){display_directories[0]}'
-        self.directorySelection.options = display_directories
+        #display_directories[0] = f'(active){display_directories[0]}'
+        index = self.directorySelection.index if self.directorySelection.value in self.directories else 0
+        self.directorySelection.options = self.directories#display_directories
+        self.directorySelection.index = index
     # output functions
     def save_figure(self,a):
         self.saveBtn.icon = 'hourglass-start'
@@ -501,23 +516,38 @@ class spectrumBrowser():
             data = []
             xx = []
             for i,spec in enumerate(self.spec):
-                current = abs(np.average(spec.get_channel('I')[0])) # in pA
                 time = float(spec.header['Exposure Time [ms]'])/1000 # convert to seconds
-                dt = time / len(self.spec_data[i])
-                dq = abs(spec.get_channel('I')[0]) * dt # in pC
-                q = np.sum(dq) # total charge in pC
-                charge = current * time
-                energies,intensities = self.rebin_intensity_nm_to_ev(self.spec_x[i],self.spec_data[i])
-                if self.plasmonReference.value != 'None' and self.plasmonInfo['file'] != None:
-                    plasmon = abs(self.plasmonInfo['interp'](energies))
-                    data.append(intensities/q/plasmon*(plasmon>0)*(self.spec_data[i]>35)) # remove counts below 35 to avoid noise amplification
+                normfactor = 1
+                if self.normalizeTimeBtn.value:
+                    normfactor *= time
+                if self.normalizeCurrentBtn.value:
+                    current = abs(np.average(spec.get_channel('I')[0])) # in pA
+                    normfactor *= current
+                if self.normalizeEnergyBtn.value:
+                    energies,intensities = self.rebin_intensity_nm_to_ev(self.spec_x[i],self.spec_data[i])
                 else:
-                    data.append(intensities/q)
+                    energies = 1240/self.spec_x[i]
+                    intensities = self.spec_data[i]
+                if self.plasmonReference.value != 'None' and self.plasmonInfo['file'] != None and self.normalizePlasmonBtn.value:
+                    plasmon = abs(self.plasmonInfo['interp'](energies))+.1
+
+                    data.append(intensities/normfactor/plasmon*(plasmon>0)*(self.spec_data[i]>5)) # remove counts below 35 to avoid noise amplification
+                else:
+                    data.append(intensities/normfactor)
                 xx.append(energies) # convert from nm to eV
             self.spec_data = data
             self.spec_x = xx
             self.spec_info[0]['x_unit'] = 'eV'
-            self.spec_info[0]['y_unit'] = 'cts/pC/eV'
+            factor_list = ['cts']
+            if self.normalizeCurrentBtn.value and self.normalizeTimeBtn.value:
+                factor_list += ['pC']
+            if self.normalizeCurrentBtn.value and not self.normalizeTimeBtn.value:
+                factor_list += ['pA']
+            if self.normalizeTimeBtn.value and not self.normalizeCurrentBtn.value:
+                factor_list += ['s']
+            if self.normalizeEnergyBtn.value:
+                factor_list += ['eV']
+            self.spec_info[0]['y_unit'] = '/'.join(factor_list) #cts/pC/eV'
             self.spec_info[0]['x_label'] = 'Energy'
 
             return spec, spec_data, spec_x
@@ -816,7 +846,7 @@ class spectrumBrowser():
             vmax = np.max(dataArray)
             #print(yLabels)
             self.axes.clear()
-            axesImage = self.axes.imshow(dataArray,aspect='auto',origin='lower',extent=[np.min(xData),np.max(xData),ymin,ymax],cmap=self.cmapSelection.value,interpoolation='none')
+            axesImage = self.axes.imshow(dataArray,aspect='auto',origin='lower',extent=[np.min(xData),np.max(xData),ymin,ymax],cmap=self.cmapSelection.value,interpolation='none')
             self.axes.set_ylabel(ylabel)
             self.axes.set_xlabel(f'{self.spec_info[0]["x_label"]} ({self.spec_info[0]["x_unit"]})')
             if not self.cb:
@@ -873,7 +903,7 @@ class spectrumBrowser():
             elif default_channels[0] != None:
                 self.channelXSelect.value = default_channels[0]
             else:
-                self.channelXSelect.value = ['Index']
+                self.channelXSelect.value = 'Index'
             if self.current_experiment == self.loaded_experiments[0] and current_value_Y in self.spec[0].channels:
                 self.channelYSelect.value = [current_value_Y]
             elif default_channels[1] != None:
