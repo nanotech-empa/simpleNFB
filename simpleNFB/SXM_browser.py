@@ -93,79 +93,95 @@ class imageBrowser():
         extraLargeLayout = widgets.Layout(visibility='visible',width='200px')
         layout = lambda x: widgets.Layout(visibility='visible',width=f'{x}px')
         layout_h = lambda x: widgets.Layout(visibility='hidden',width=f'{x}px')
+        flex_layout = lambda x: widgets.Layout(display='flex',width=f'{x}%')
+        flex_layout_btn = lambda x: widgets.Layout(display='flex',width=f'{x}%',align_items='center',justify_content='center')
+        flex_layout_h = lambda x: widgets.Layout(visibility='hidden',display='flex',width=f'{x}%')
         self._layout = layout
+        
         # selections
-        self.directorySelection = Selection_Widget(self.directories,'Folders:',rows=8)
-        self.selectionList = Selection_Widget(self.sxm_files,'SXM Files:',rows=27)
+        self.rootFolder = widgets.Text(description='',layout=widgets.Layout(dispaly='flex',width='90%'))
+        self.directorySelection = widgets.Select(description='',options=self.directories,rows=8,layout=flex_layout(98))
+        self.selectionList = widgets.Select(description='',options=self.sxm_files,rows=27,layout=flex_layout(98))
+        
         #self.channelSelect = Selection_Widget(['z'],'Channels:',rows=5)
-        self.channelSelect = widgets.Dropdown(description='Channels:',layout=layout(200))
-        self.refreshBtn = Btn_Widget('',icon='refresh',tooltip='Reload file list',layout=layout(30))
+        self.channelSelect = widgets.Dropdown(description='',layout=layout(165))
+        self.refreshBtn = Btn_Widget('',icon='refresh',tooltip='Reload file list',layout=flex_layout_btn(24))
+        
         # text display
         self.filenameText = Text_Widget('')
         self.indexText = Text_Widget('0')
         self.errorText = Selection_Widget([],'Out:',rows=5)
-        self.saveNote = Text_Widget('',description='Note:',tooltip='This text is appended to filename when the figure is saved',layout=layout(200))
+        self.saveNote = Text_Widget('',description='',tooltip='This text is appended to filename when the figure is saved',layout=flex_layout(99))
+        
         # image display
-        self.nextBtn = Btn_Widget('',layout=layout(30),icon='arrow-circle-down',tooltip='Load next image in list')
-        self.previousBtn = Btn_Widget('',layout=layout(30),icon='arrow-circle-up',tooltip='Load previous image in list')
-        self.linebylineBtn = widgets.ToggleButton(description='',value=False,layout=layout(30),icon='align-justify',tooltip='Line by line linear subtraction')
-        self.flattenBtn = widgets.ToggleButton(description='',value=False,layout=layout(30),icon='square-o',tooltip='Apply plane fit and subtraction')
-        self.edgesBtn = widgets.ToggleButton(description='',value=False,layout=layout(30),icon='dot-circle-o',tooltip='Apply laplace filter (edge detection)')
-        self.gaussianBtn = widgets.ToggleButton(description='',value=False,layout=layout(30),icon='bullseye',tooltip='Apply a 3x3 Gaussian filter')
-        self.invertBtn = widgets.ToggleButton(description='',value=False,layout=layout(30),icon='exchange',tooltip='Invert sign of the image data')
-        self.directionBtn = widgets.ToggleButton(description='',value=False,layout=layout(30),icon='caret-square-o-right',tooltip='select scan direction, default is forward')
-        self.fixZeroBtn = widgets.ToggleButton(description='',value=False,layout=layout(30),icon='neuter',tooltip='Rescale the image data so the minimum value is zero')
-        self.saveBtn = Btn_Widget('',layout=layout(30),icon='file-image-o',tooltip='Save displayed image to \\browser_output folder\nText in the "note" is appended to figure filename')
-        self.copyBtn = Btn_Widget('',layout=layout(30),icon='clipboard',tooltip='Save displayed image to \\browser_output folder\ncopy displayed image to clipboard')
-        self.figure_display = widgets.Output()
+        self.nextBtn = Btn_Widget('',layout=layout(40),icon='arrow-circle-down',tooltip='Load next image in list')
+        self.previousBtn = Btn_Widget('',layout=layout(40),icon='arrow-circle-up',tooltip='Load previous image in list')
+        self.linebylineBtn = widgets.ToggleButton(description='',value=False,layout=layout(40),icon='align-justify',tooltip='Line by line linear subtraction')
+        self.flattenBtn = widgets.ToggleButton(description='',value=False,layout=layout(40),icon='square-o',tooltip='Apply plane fit and subtraction')
+        self.edgesBtn = widgets.ToggleButton(description='',value=False,layout=layout(40),icon='dot-circle-o',tooltip='Apply laplace filter (edge detection)')
+        self.gaussianBtn = widgets.ToggleButton(description='',value=False,layout=layout(40),icon='bullseye',tooltip='Apply a 3x3 Gaussian filter')
+        self.invertBtn = widgets.ToggleButton(description='',value=False,layout=layout(40),icon='exchange',tooltip='Invert sign of the image data')
+        self.directionBtn = widgets.ToggleButton(description='',value=False,layout=layout(40),icon='caret-square-o-right',tooltip='select scan direction, default is forward')
+        self.fixZeroBtn = widgets.ToggleButton(description='',value=False,layout=layout(40),icon='neuter',tooltip='Rescale the image data so the minimum value is zero')
+        
+        # outputs
+        self.saveBtn = Btn_Widget('',layout=flex_layout_btn(24),icon='file-image-o',tooltip='Save displayed image to \\browser_output folder\nText in the "note" is appended to figure filename')
+        self.copyBtn = Btn_Widget('',layout=flex_layout_btn(24),icon='clipboard',tooltip='Save displayed image to \\browser_output folder\ncopy displayed image to clipboard')
+        self.figure_display = widgets.Output(layout=flex_layout_btn(99))
+        
         # cmap options
-        self.vmin = widgets.FloatText(value=0,description='Min:',step=.1,layout=layout(180))
-        self.vmax = widgets.FloatText(value=1,description='Max:',step=.1,layout=layout(180))
-        self.cmapSelection = widgets.Dropdown(description='colormap:',options=plt.colormaps(),value=cmap,layout=layout(180))
+        self.vmin = widgets.FloatText(value=0,description='Min:',step=.1,layout=flex_layout(50),style={'description_width':'40px'})
+        self.vmax = widgets.FloatText(value=1,description='Max:',step=.1,layout=flex_layout(50),style={'description_width':'40px'})
+        self.cmapSelection = widgets.Dropdown(description='Color Map:',options=plt.colormaps(),value=cmap,layout=flex_layout(99),style={'description_width':'77px'})
+        
         # figure display toggles
         ### show title
-        self.configOptionBtn = widgets.ToggleButton(description='',icon='gear',value=False,tooltip='Display options panel',layout=layout(30))
-        self.titleToggle = widgets.ToggleButton(value=True, description='Show Title',tooltip='Toggle figure title',layout=layout_h(150))
-        self.labelToggle = widgets.ToggleButton(value=False, description='Show Labels',tooltip='Toggle figure laels',layout=layout_h(150))
+        self.configOptionBtn = widgets.ToggleButton(description='',icon='gear',value=False,tooltip='Display options panel',layout=flex_layout_btn(24))
+        self.titleToggle = widgets.ToggleButton(value=True, description='Show Title',tooltip='Toggle figure title',layout=flex_layout_h(98))
+        self.labelToggle = widgets.ToggleButton(value=False, description='Show Labels',tooltip='Toggle figure laels',layout=flex_layout_h(98))
 
         ### show info labels
-        self.labelLabel = widgets.Label(value='Figure Label Settings',layout=layout_h(150))
-        self.upperLeftSelect = widgets.Dropdown(value='bias',options=['none','channel','bias','setpoint','feedback','date','filename','scalebar'],description='UL:',layout=layout_h(150),style={'description_width':'40px'})
-        self.upperRightSelect = widgets.Dropdown(value='filename',options=['none','channel','bias','setpoint','feedback','date','filename','scalebar'],description='UR:',layout=layout_h(150),style={'description_width':'40px'})
-        self.lowerLeftSelect = widgets.Dropdown(value='none',options=['none','channel','bias','setpoint','feedback','date','filename','scalebar'],description='LL:',layout=layout_h(150),style={'description_width':'40px'})
-        self.lowerRightSelect = widgets.Dropdown(value='scalebar',options=['none','channel','bias','setpoint','feedback','date','filename','scalebar'],description='LR:',layout=layout_h(150),style={'description_width':'40px'})
-        self.labelColorSelect = widgets.ColorPicker(concise=True,description='Color:',value='orange',layout=layout_h(150),style={'description_width':'40px'})
-
+        self.labelLabel = widgets.Label(value='Figure Label Settings',layout=flex_layout_h(98))
+        self.upperLeftSelect = widgets.Dropdown(value='bias',options=['none','channel','bias','setpoint','feedback','date','filename','scalebar'],description='UL:',layout=flex_layout_h(98),style={'description_width':'40px'})
+        self.upperRightSelect = widgets.Dropdown(value='filename',options=['none','channel','bias','setpoint','feedback','date','filename','scalebar'],description='UR:',layout=flex_layout_h(98),style={'description_width':'40px'})
+        self.lowerLeftSelect = widgets.Dropdown(value='none',options=['none','channel','bias','setpoint','feedback','date','filename','scalebar'],description='LL:',layout=flex_layout_h(98),style={'description_width':'40px'})
+        self.lowerRightSelect = widgets.Dropdown(value='scalebar',options=['none','channel','bias','setpoint','feedback','date','filename','scalebar'],description='LR:',layout=flex_layout_h(98),style={'description_width':'40px'})
+        self.labelColorSelect = widgets.ColorPicker(concise=True,description='Color:',value='orange',layout=flex_layout_h(98),style={'description_width':'40px'})
+        self.labelFontSize = widgets.IntText(description='size:',value=20,tooltip='change label font size',style={'description_width':'40px'},layout=flex_layout(98))
+        
         # figure title options
-        self.titleLabel = widgets.Label(value='Figure Title Settings',layout=layout_h(150))
-        self.channelToggle = widgets.ToggleButton(value=True,description='channel',layout=layout_h(150))
-        self.setpointToggle = widgets.ToggleButton(value=True,description='Setpoint',layout=layout_h(150))
-        self.feedbackToggle = widgets.ToggleButton(value=True,description='Feedback',layout=layout_h(150))
-        self.locationToggle = widgets.ToggleButton(value=True,description='file location',layout=layout_h(150))
-        self.depthSelection = widgets.Dropdown(value='full',options=['full',1,2,3,4,5],description='Depth:',tooltip='folder depth to display in location section of the image title',layout=layout_h(150))
-        self.nameToggle = widgets.ToggleButton(value=True,description='Filename',layout=layout_h(150))
-        self.directionToggle = widgets.ToggleButton(value=True,description='Direction',layout=layout_h(150))
-        self.dateToggle = widgets.ToggleButton(value=True,description='Date',layout=layout_h(150))
+        self.titleLabel = widgets.Label(value='Figure Title Settings',layout=flex_layout_h(98))
+        self.channelToggle = widgets.ToggleButton(value=True,description='channel',layout=flex_layout_h(98))
+        self.setpointToggle = widgets.ToggleButton(value=True,description='Setpoint',layout=flex_layout_h(98))
+        self.feedbackToggle = widgets.ToggleButton(value=True,description='Feedback',layout=flex_layout_h(98))
+        self.locationToggle = widgets.ToggleButton(value=True,description='file location',layout=flex_layout_h(98))
+        self.depthSelection = widgets.Dropdown(value='full',options=['full',1,2,3,4,5],description='Depth:',tooltip='folder depth to display in location section of the image title',layout=flex_layout_h(98),style={'description_width':'40px'})
+        self.nameToggle = widgets.ToggleButton(value=True,description='Filename',layout=flex_layout_h(98))
+        self.directionToggle = widgets.ToggleButton(value=True,description='Direction',layout=flex_layout_h(98))
+        self.dateToggle = widgets.ToggleButton(value=True,description='Date',layout=flex_layout_h(98))
+        self.titleFontSize = widgets.IntText(description='size:',value=9,tooltip='change title font size',style={'description_width':'40px'},layout=flex_layout(98))
 
         # image filter settings
-        self.filterLabel = widgets.Label(value='Image Filter Settings',layout=layout_h(150))
-        self.gaussianToggle = widgets.ToggleButton(value=False,description='Gaussian',layout=layout_h(90))
-        self.gaussianSize = widgets.BoundedIntText(value=2,min=0,max=10,step=1,tooltip='size of the gaussain kernel',layout=layout_h(60))
-        self.medianToggle = widgets.ToggleButton(value=False,description='Median',layout=layout_h(90))
-        self.medianSize = widgets.BoundedIntText(value=3,min=1,max=20,step=1,tooltip='size of the median kernel',layout=layout_h(60))
-        self.laplacToggle = widgets.ToggleButton(value=False,description='Laplace',layout=layout_h(90))
-        self.laplaceSize = widgets.BoundedIntText(value=1,min=1,max=10,step=1,tooltip='size of the laplace filter kernel',layout=layout_h(60))
+        self.filterLabel = widgets.Label(value='Image Filter Settings',layout=flex_layout_h(98))
+        self.gaussianToggle = widgets.ToggleButton(value=False,description='Gaussian',layout=flex_layout_h(60))
+        self.gaussianSize = widgets.BoundedIntText(value=2,min=0,max=10,step=1,tooltip='size of the gaussain kernel',layout=flex_layout_h(40))
+        self.medianToggle = widgets.ToggleButton(value=False,description='Median',layout=flex_layout_h(60))
+        self.medianSize = widgets.BoundedIntText(value=3,min=1,max=20,step=1,tooltip='size of the median kernel',layout=flex_layout_h(40))
+        self.laplacToggle = widgets.ToggleButton(value=False,description='Laplace',layout=flex_layout_h(60))
+        self.laplaceSize = widgets.BoundedIntText(value=1,min=1,max=10,step=1,tooltip='size of the laplace filter kernel',layout=flex_layout_h(40))
         # plane fit settings ### needs interactive plot functionality (select 3 points) --> new implementation of plane subtraction function
         self.planeFitToggle = widgets.ToggleButton(value=False,description='Plane Fit',tooltip='plane subtraction')
 
         # layouts
-        self.h_selection_btn_layout = HBox(children=[self.refreshBtn,self.previousBtn,self.nextBtn,self.saveBtn,self.copyBtn,self.configOptionBtn])
         self.h_process_btn_layout = HBox(children=[self.directionBtn,self.fixZeroBtn,self.linebylineBtn,self.flattenBtn,self.invertBtn])
-        self.v_text_layout = VBox(children=[self.channelSelect,self.saveNote])
-        self.v_btn_layout = VBox(children=(self.h_selection_btn_layout,self.h_process_btn_layout))
-        self.v_color_layout = VBox(children=(self.cmapSelection,self.vmin,self.vmax))
-        self.h_user_layout = HBox(children=[self.v_text_layout,self.v_btn_layout,self.v_color_layout])
-        self.v_file_layout = VBox(children=[self.directorySelection,self.selectionList])
+        self.h_channel_layout = HBox(children=[widgets.Label('Channel'),self.channelSelect])
+        self.v_color_layout = VBox(children=[HBox(children=[self.vmin,self.vmax]),self.cmapSelection])
+        self.h_user_layout = HBox(children=[VBox(children=[self.h_channel_layout,self.h_process_btn_layout]),self.v_color_layout],layout=flex_layout_btn(100))
+        self.v_file_layout = VBox(children=[widgets.Label('Folders'),self.directorySelection,
+                                            widgets.Label('Images'),self.selectionList,
+                                            VBox(children=[HBox(children=[self.refreshBtn,self.saveBtn,self.copyBtn,self.configOptionBtn]),
+                                                           widgets.Label('Note')]),
+                                                           self.saveNote],layout=flex_layout(20))
         self.v_settings_layout = VBox(children=[self.titleToggle,
                                                 self.labelToggle,
                                                 self.labelLabel,
@@ -174,6 +190,7 @@ class imageBrowser():
                                                 self.lowerLeftSelect,
                                                 self.lowerRightSelect,
                                                 self.labelColorSelect,
+                                                self.labelFontSize,
                                                 self.titleLabel,
                                              self.channelToggle,
                                              self.setpointToggle,
@@ -183,23 +200,31 @@ class imageBrowser():
                                              self.nameToggle,
                                              self.directionToggle,
                                              self.dateToggle,
+                                             self.titleFontSize,
                                              self.filterLabel,
-                                             HBox(children=[self.gaussianToggle,self.gaussianSize],layout=layout_h(150)),
-                                             HBox(children=[self.medianToggle,self.medianSize],layout=layout_h(150)),
-                                             HBox(children=[self.laplacToggle,self.laplaceSize],layout=layout_h(150))],layout=layout_h(180))
-        self.v_image_layout = VBox(children=[self.figure_display,self.h_user_layout])
-        self.mainlayout = HBox(children=[self.v_file_layout,self.v_image_layout,self.v_settings_layout])
+                                             HBox(children=[self.gaussianToggle,self.gaussianSize],layout=flex_layout_h(98)),
+                                             HBox(children=[self.medianToggle,self.medianSize],layout=flex_layout_h(98)),
+                                             HBox(children=[self.laplacToggle,self.laplaceSize],layout=flex_layout_h(98))],layout=flex_layout_h(10))
+        
+        self.v_image_layout = VBox(children=[self.figure_display,self.h_user_layout],layout=flex_layout_btn(70))
 
-        # connect widgets to functions
+        self.mainlayout = VBox(children=[HBox(children=[widgets.Label('Session',layout=widgets.Layout(display='flex',justify_content='flex-start',width='10%')),
+                                                        self.rootFolder],layout=flex_layout(99)),
+                                         HBox(children=[self.v_file_layout,self.v_image_layout,self.v_settings_layout],layout=flex_layout(99))],
+                                         layout=flex_layout(100))
+
+        ## Display and output events
+        #### connect config panel widgets to functions
         for child in self.v_settings_layout.children:
             if type(child) == type(self.v_settings_layout):
                 for ch in child.children:
                     ch.observe(self.handler_settingsChange,names='value')
             child.observe(self.handler_settingsChange,names='value')
-        self.nextBtn.on_click(self.nextDisplay)
-        self.previousBtn.on_click(self.previousDisplay)
         self.saveBtn.on_click(self.save_figure)
-        self.refreshBtn.on_click(self.handler_folder_selection)
+        self.copyBtn.on_click(self.copy_figure)
+        self.configOptionBtn.observe(self.handler_configOptionsDisplay,names='value')
+
+        ## image processing events
         self.directionBtn.observe(self.update_scan_direction,names='value')
         self.linebylineBtn.observe(self.redraw_image,names='value')
         self.flattenBtn.observe(self.redraw_image,names='value')
@@ -207,14 +232,18 @@ class imageBrowser():
         self.fixZeroBtn.observe(self.redraw_image,names='value')
         self.edgesBtn.observe(self.redraw_image,names='value')
         self.gaussianBtn.observe(self.redraw_image,names='value')
+        self.vmin.observe(self.updateDisplayImage,names='value')
+        self.vmax.observe(self.updateDisplayImage,names='value')
+
+        ## selection events
+        self.nextBtn.on_click(self.nextDisplay)
+        self.previousBtn.on_click(self.previousDisplay)
+        self.refreshBtn.on_click(self.handler_root_folder_update)
         self.directorySelection.observe(self.handler_folder_selection,names=['value'])
         self.selectionList.observe(self.handler_file_selection,names=['value'])
         self.channelSelect.observe(self.handler_channel_selection,names=['value'])
         self.cmapSelection.observe(self.updateDisplayImage,names='value')
-        self.vmin.observe(self.updateDisplayImage,names='value')
-        self.vmax.observe(self.updateDisplayImage,names='value')
-        self.copyBtn.on_click(self.copy_figure)
-        self.configOptionBtn.observe(self.handler_configOptionsDisplay,names='value')
+        self.rootFolder.observe(self.handler_root_folder_update,names='value')
 
         # mpl events
         #self.figure.canvas.mpl_connect('button_press_event',self.mouse_click)
@@ -223,8 +252,8 @@ class imageBrowser():
         with self.figure_display:
             self.figure_display.clear_output(wait=True)
             plt.show(self.figure)
-        self.find_directories(self.active_dir)
-        self.update_directories()
+        #self.find_directories(self.active_dir)
+        #self.update_directories()
         #self.updateInfoText()
         #self.handler_file_selection('startup')
         #self.updateErrorText('finish startup')
@@ -246,7 +275,7 @@ class imageBrowser():
         return directories
     def update_directories(self):
         display_directories = ['\\'.join(str(directory).split('\\')[-1:]) for directory in self.directories]
-        display_directories[0] = f'(active){display_directories[0]}'
+        display_directories[0] = 'session folder'
         self.directorySelection.options = display_directories
     def copy_figure(self,a):
         self.save_figure(a)
@@ -304,8 +333,9 @@ class imageBrowser():
         #self.updateErrorText(str(round(event.xdata,2)) + ' ' + str(round(event.ydata,2)))
     # image generation
     def redraw_image(self,a):
-        self.update_image_data()
-        self.updateDisplayImage()
+        if self.img != None:
+            self.update_image_data()
+            self.updateDisplayImage()
     def load_new_image(self):
         #self.updateErrorText('load new image')
         directory = self.directories[self.directorySelection.index]
@@ -458,19 +488,20 @@ class imageBrowser():
         else:
             #self.cb.remove()
             self.cb.update_normal(axesImage)# = self.figure.colorbar(axesImage,ax=ax,shrink=0.75,pad=.01)
-        self.cb.set_label(f'{self.channelSelect.value} ({self.image_info["unit"]})',fontsize=self.fontsize)
-        ax.set_title(self.scan_info,fontsize=self.titlesize,loc='left')
-        ax.set_xlabel('x (nm)',fontsize=self.fontsize)
-        ax.set_ylabel('y (nm)',fontsize=self.fontsize)
+        self.cb.set_label(f'{self.channelSelect.value} ({self.image_info["unit"]})',fontsize=self.labelFontSize.value)
+        ax.set_title(self.scan_info,fontsize=self.titleFontSize.value,loc='left')
+        ax.set_xlabel('x (nm)',fontsize=self.labelFontSize.value)
+        ax.set_ylabel('y (nm)',fontsize=self.labelFontSize.value)
         ax.set_xticks([0,w])
         ax.set_yticks([0,h])
-        ax.set_xticklabels([0,round(w,2)],fontsize=self.fontsize)
-        ax.set_yticklabels([0,round(h,2)],fontsize=self.fontsize)
+        ax.set_xticklabels([0,round(w,2)],fontsize=self.labelFontSize.value)
+        ax.set_yticklabels([0,round(h,2)],fontsize=self.labelFontSize.value)
         if self.labelToggle.value:
             ax.axis('off')
             self.addFigureLabels()
         else:
             ax.axis('on')
+
     def addFigureLabels(self):
         color = self.labelColorSelect.value
         ax = self.axes
@@ -500,7 +531,7 @@ class imageBrowser():
                 text = f'{bias[0]}{bias[1]}'
             elif selection == 'setpoint':
                 setpoint = self.scan_dict.get('setpoint','N/A')
-                text = f'{setpoint}'
+                text = f'{setpoint[0]} {setpoint[1]}'
             elif selection == 'feedback':
                 feedback = self.scan_dict.get('feedback','N/A')
                 text = f'{feedback}'
@@ -524,18 +555,19 @@ class imageBrowser():
                 else:
                     unit = 'nm'
                 label = f'{scalebar_length} {unit}'
-                scalebar = AnchoredSizeBar(ax.transAxes, actual_length_per,label,align,frameon = False,color=color,sep=-int(15*self.fontsize/12),pad=1,fontproperties=self.font,size_vertical=0.1/self.fontsize)
+                self.font = fm(size=self.labelFontSize.value,family='sans-serif')
+                scalebar = AnchoredSizeBar(ax.transAxes, actual_length_per,label,align,frameon = False,color=color,label_top=True,sep=1,pad=1,fontproperties=self.font,size_vertical=1e-2)
                 ax.add_artist(scalebar)
                 continue
             # add text to axes
             if align == 'upper left':
-                ax.text(x_pos,y_pos,text,fontsize=self.fontsize,verticalalignment='top',horizontalalignment='left',color=color,alpha=0.7) #,backgroundcolor='black'
+                ax.text(x_pos,y_pos,text,fontsize=self.labelFontSize.value,verticalalignment='top',horizontalalignment='left',color=color) #,backgroundcolor='black'
             elif align == 'upper right':
-                ax.text(x_pos,y_pos,text,fontsize=self.fontsize,verticalalignment='top',horizontalalignment='right',color=color,alpha=0.7)
+                ax.text(x_pos,y_pos,text,fontsize=self.labelFontSize.value,verticalalignment='top',horizontalalignment='right',color=color)
             elif align == 'lower left':
-                ax.text(x_pos,y_pos,text,fontsize=self.fontsize,verticalalignment='bottom',horizontalalignment='left',color=color,alpha=0.7)
+                ax.text(x_pos,y_pos,text,fontsize=self.labelFontSize.value,verticalalignment='bottom',horizontalalignment='left',color=color)
             elif align == 'lower right':
-                ax.text(x_pos,y_pos,text,fontsize=self.fontsize,verticalalignment='bottom',horizontalalignment='right',color=color,alpha=0.7)
+                ax.text(x_pos,y_pos,text,fontsize=self.labelFontSize.value,verticalalignment='bottom',horizontalalignment='right',color=color)
         #self.updateErrorText('finish update axes')
     # display configuration
     def updateDisplayImage(self,*params):
@@ -599,6 +631,23 @@ class imageBrowser():
                         ch.layout.visibility = 'hidden'
                 child.layout.visibility = 'hidden'
 
+    def handler_root_folder_update(self,a):
+        new_root = self.rootFolder.value
+        if type(a) == type(self.refreshBtn): 
+            current_directory = self.directorySelection.value
+            current_file = self.selectionList.value
+            # check if filepath exists
+        exists = os.path.exists(new_root)
+        is_dir = os.path.isdir(new_root)
+        if exists and is_dir:
+            self.directorySelection.options = [self.active_dir]
+            self.directories = [self.active_dir]
+            self.active_dir = Path(new_root)
+            self.find_directories(self.active_dir)
+            self.update_directories()
+        if type(a) == type(self.refreshBtn): 
+            self.directorySelection.value = current_directory
+            #self.selectionList.value = current_file
     def handler_folder_selection(self,a):
         index=0
         if type(a) == type(self.refreshBtn): 
@@ -624,7 +673,10 @@ class imageBrowser():
                 self.selectionList.value = self.filenameText.value
     def handler_file_selection(self,update):
         #self.updateErrorText(str(update))
-        self.image_index = self.sxm_files.index(self.selectionList.value)
+        if self.selectionList.value != None:
+            self.image_index = self.sxm_files.index(self.selectionList.value)
+        else:
+            return
         try:
             self.load_new_image()
             self.updateDisplayImage()

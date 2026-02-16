@@ -118,9 +118,12 @@ class spectrumBrowser():
         extraLargeLayout = widgets.Layout(visibility='visible',width='200px')
         layout = lambda x: widgets.Layout(visibility='visible',width=f'{x}px')
         layout_h = lambda x: widgets.Layout(visibility='hidden',width=f'{x}px')
-
+        flex_layout = lambda x: widgets.Layout(display='flex',width=f'{x}%')
+        flex_layout_btn = lambda x: widgets.Layout(display='flex',width=f'{x}%',align_items='center',justify_content='center')
+        flex_layout_h = lambda x: widgets.Layout(visibility='hidden',display='flex',width=f'{x}%')
+        
         ### selections ###
-        #self.rootSelection = Btn_Widget('Open',disabled=True)
+        self.rootFolder = widgets.Text(description='',layout=widgets.Layout(dispaly='flex',width='90%'))
         self.directorySelection = Selection_Widget(self.directories,'Folders:',rows=5)
         self.selectionList = widgets.SelectMultiple(options=self.dat_files,value=[],description='DAT Files:',rows=30)
         self.filterSelection = widgets.SelectMultiple(options=['all','dIdV','Z-Spectroscopy','stml','History'],value=['all'],description='Filter',rows=5)
@@ -297,7 +300,8 @@ class spectrumBrowser():
                                                     titles=['Legend Settings','Title Settings','Filter Settings','STML Mode','Axes Controls'])
 
         self.v_image_layout = VBox(children=[self.figure_display,self.h_user_layout])
-        self.h_main_layout = HBox(children=[self.v_file_select_layout,self.v_image_layout,self.v_settings_layout])
+        self.h_main_layout = VBox(children=[HBox(children=[widgets.Label('Session',layout=widgets.Layout(display='flex',justify_content='flex-start',width='10%')),
+                                                        self.rootFolder],layout=flex_layout(99)),HBox(children=[self.v_file_select_layout,self.v_image_layout,self.v_settings_layout],layout=flex_layout(99))],layout=flex_layout(100))
 
         # connect widgets to functions
         self.groupSize.observe(self.update_legend_settings,names='value')
@@ -326,13 +330,14 @@ class spectrumBrowser():
         self.copyBtn.on_click(self.copy_figure)
         self.csvBtn.on_click(self.save_data)
         self.generateWaterFallBtn.on_click(self.generateWaterFall)
-        self.refreshBtn.on_click(self.handler_folder_selection)
+        self.refreshBtn.on_click(self.handler_root_folder_update)
         self.flattenBtn.observe(self.redraw_image,names='value')
         self.legendBtn.observe(self.redraw_image,names='value')
         self.referenceLocBtn.on_click(self.plotSpectrumLocations)
         self.plot2DBtn.on_click(self.plot2D)
         self.fixZeroBtn.observe(self.redraw_image,names='value')
 
+        self.rootFolder.observe(self.handler_root_folder_update,names='value')
         self.directorySelection.observe(self.handler_folder_selection,names=['value'])
         self.selectionList.observe(self.handler_file_selection,names=['value'])
         self.filterSelection.observe(self.handler_folder_selection,names='value')
@@ -377,18 +382,10 @@ class spectrumBrowser():
             pass
         self.directories.extend(directories)
         return directories
-    def find_directories(self,_path):
-        exclude_folders = ['browser_outputs', 'ipynb', 'spmpy', '__pycache__', 'raw_stml_data']
-        session_directories = [x for x in next(os.walk(self.active_dir))[1] if x not in exclude_folders]
-        sub_directories = dict(zip(session_directories, [[d for d in next(os.walk(os.path.join(self.active_dir,x)))[1] if d not in exclude_folders] for x in session_directories]))
-        self.directories = session_directories
-        self.update_directories()
     def update_directories(self):
         display_directories = ['\\'.join(str(directory).split('\\')[-1:]) for directory in self.directories]
-        #display_directories[0] = f'(active){display_directories[0]}'
-        index = self.directorySelection.index if self.directorySelection.value in self.directories else 0
-        self.directorySelection.options = self.directories#display_directories
-        self.directorySelection.index = index
+        display_directories[0] = 'session folder'
+        self.directorySelection.options = display_directories
     # output functions
     def save_figure(self,a):
         self.saveBtn.icon = 'hourglass-start'
@@ -446,8 +443,9 @@ class spectrumBrowser():
         self.csvBtn.icon = 'list-ul'
     # image generation
     def redraw_image(self,a):
-        self.update_image_data()
-        self.updateDisplayImage()
+        if self.loaded_experiments != None:
+            self.update_image_data()
+            self.updateDisplayImage()
     def load_new_image(self,filename=None):
         #self.updateErrorText('load new image')
         directory = self.directories[self.directorySelection.index]
@@ -989,6 +987,23 @@ class spectrumBrowser():
 #        if a['owner'] == self.legendText:
 #            self.legendEntry.value = a['new']
 ### Selection update
+    def handler_root_folder_update(self,a):
+        new_root = self.rootFolder.value
+        if type(a) == type(self.refreshBtn): 
+            current_directory = self.directorySelection.value
+            current_file = self.selectionList.value
+            # check if filepath exists
+        exists = os.path.exists(new_root)
+        is_dir = os.path.isdir(new_root)
+        if exists and is_dir:
+            self.directorySelection.options = [self.active_dir]
+            self.directories = [self.active_dir]
+            self.active_dir = Path(new_root)
+            self.find_directories(self.active_dir)
+            self.update_directories()
+        if type(a) == type(self.refreshBtn): 
+            self.directorySelection.value = current_directory
+            #self.selectionList.value = current_file
     def handler_folder_selection(self,a):
         index=0
         if type(a) == type(self.refreshBtn): 
