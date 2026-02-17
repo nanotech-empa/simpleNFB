@@ -124,11 +124,12 @@ class spectrumBrowser():
         
         ### selections ###
         self.rootFolder = widgets.Text(description='',layout=widgets.Layout(dispaly='flex',width='90%'))
-        self.directorySelection = Selection_Widget(self.directories,'Folders:',rows=5)
-        self.selectionList = widgets.SelectMultiple(options=self.dat_files,value=[],description='DAT Files:',rows=30)
-        self.filterSelection = widgets.SelectMultiple(options=['all','dIdV','Z-Spectroscopy','stml','History'],value=['all'],description='Filter',rows=5)
-        self.newFilterText = widgets.Text(description='New Filter',tooltip='user defined string to use for file filtering',layout=layout(200))
-        self.addFilterBtn = widgets.Button(description='+',tooltip='click to add new filter to selection',layout=layout(30))
+        self.directorySelection = widgets.Select(options=self.directories,rows=8,layout=flex_layout(98))
+        self.directoryDisplayDepth = widgets.Dropdown(description='depth',value=1,options=['full',1,2,3,4,5],tooltip='depth of the folder structure displayed in the selection menu',layout=flex_layout_btn(75),style={'description_width':'40px'})
+        self.selectionList = widgets.SelectMultiple(options=self.dat_files,value=[],description='',rows=30,layout=flex_layout(98))
+        self.filterSelection = widgets.SelectMultiple(options=['all','dIdV','Z-Spectroscopy','stml','History'],value=['all'],description='',rows=5,layout=flex_layout(98))
+        self.newFilterText = widgets.Text(description='',tooltip='user defined string to use for file filtering',layout=flex_layout(50))
+        self.addFilterBtn = widgets.Button(description='+',tooltip='click to add new filter to selection',layout=flex_layout_btn(24))
     
         self.channelXSelect = widgets.Dropdown(options=['Index'],value=None,description='X:')
         self.channelYSelect = widgets.SelectMultiple(options=[None],value=[None],description='Y:',rows=5)
@@ -225,14 +226,18 @@ class spectrumBrowser():
         self.yLimitLock = widgets.ToggleButton(value=False,description='',icon='lock',tooltip='Lock X axis limits when loading new data',layout=layout(35))
 
         # layouts
-        self.h_new_filter_layout = HBox(children=[self.newFilterText,self.addFilterBtn])
-        self.v_filter_layout = VBox(children=[self.filterSelection,self.h_new_filter_layout])
+        self.h_new_filter_layout = HBox(children=[widgets.Label('New',layout=flex_layout_btn(24)),self.newFilterText,self.addFilterBtn])
+        self.v_filter_layout = VBox(children=[widgets.Label('Filter',layout=flex_layout(50)),self.filterSelection,self.h_new_filter_layout])
         self.v_text_layout = VBox(children=[self.saveNote,self.errorText])
         self.h_process_layout = HBox(children=[self.flattenBtn,self.fixZeroBtn,self.referenceLocBtn,self.plot2DBtn])
         self.h_selection_btn_layout = HBox(children=[self.refreshBtn,self.csvBtn,self.saveBtn,self.copyBtn,self.settingsBtn])
 
         self.v_channel_layout = VBox(children=[self.channelXSelect,self.channelYSelect,self.saveNote])
-        self.v_file_select_layout = VBox(children=[self.directorySelection,self.selectionList,self.v_filter_layout])
+        self.v_file_select_layout = VBox(children=[HBox(children=[widgets.Label('Folder',layout=flex_layout(24)),self.directoryDisplayDepth],layout=flex_layout(98)),
+                                                   self.directorySelection,
+                                                   widgets.Label('Files',layout=flex_layout(50)),
+                                                   self.selectionList,self.v_filter_layout],
+                                                   layout=flex_layout(20))
         
         self.v_btn_layout = VBox(children=[self.h_selection_btn_layout,self.h_process_layout,self.cmapSelection,self.markerSelection])
         self.h_user_layout = HBox(children=[self.v_channel_layout,self.v_btn_layout])
@@ -300,7 +305,7 @@ class spectrumBrowser():
                                                     titles=['Legend Settings','Title Settings','Filter Settings','STML Mode','Axes Controls'])
 
         self.v_image_layout = VBox(children=[self.figure_display,self.h_user_layout])
-        self.h_main_layout = VBox(children=[HBox(children=[widgets.Label('Session',layout=widgets.Layout(display='flex',justify_content='flex-start',width='10%')),
+        self.h_main_layout = VBox(children=[HBox(children=[widgets.Label('Session',layout=widgets.Layout(display='flex',justify_content='flex-start',width='5%')),
                                                         self.rootFolder],layout=flex_layout(99)),HBox(children=[self.v_file_select_layout,self.v_image_layout,self.v_settings_layout],layout=flex_layout(99))],layout=flex_layout(100))
 
         # connect widgets to functions
@@ -339,6 +344,7 @@ class spectrumBrowser():
 
         self.rootFolder.observe(self.handler_root_folder_update,names='value')
         self.directorySelection.observe(self.handler_folder_selection,names=['value'])
+        self.directoryDisplayDepth.observe(self.update_directories,names=['value'])
         self.selectionList.observe(self.handler_file_selection,names=['value'])
         self.filterSelection.observe(self.handler_folder_selection,names='value')
         self.addFilterBtn.on_click(self.handler_update_filters)
@@ -364,7 +370,7 @@ class spectrumBrowser():
         #with self.wfFigure_display:
             #plt.show(self.wfFigure)
         self.find_directories(self.active_dir)
-        #self.update_directories()
+        self.update_directories('a')
     # show browser
     def display(self):
         #display.clear_output(wait=True)
@@ -382,8 +388,12 @@ class spectrumBrowser():
             pass
         self.directories.extend(directories)
         return directories
-    def update_directories(self):
-        display_directories = ['\\'.join(str(directory).split('\\')[-1:]) for directory in self.directories]
+    def update_directories(self,a):
+        if self.directoryDisplayDepth.value == 'full':
+            depth = 0
+        else:
+            depth = -self.directoryDisplayDepth.value
+        display_directories = ['\\'.join(str(directory).split('\\')[depth:]) for directory in self.directories]
         display_directories[0] = 'session folder'
         self.directorySelection.options = display_directories
     # output functions
@@ -1000,7 +1010,7 @@ class spectrumBrowser():
             self.directories = [self.active_dir]
             self.active_dir = Path(new_root)
             self.find_directories(self.active_dir)
-            self.update_directories()
+            self.update_directories('a')
         if type(a) == type(self.refreshBtn): 
             self.directorySelection.value = current_directory
             #self.selectionList.value = current_file

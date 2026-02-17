@@ -141,11 +141,12 @@ class imageBrowser():
         self.labelToggle = widgets.ToggleButton(value=False, description='Show Labels',tooltip='Toggle figure laels',layout=flex_layout_h(98))
 
         ### show info labels
+        label_options = ['none','channel','bias','setpoint','feedback','date','filename','scalebar','filters']
         self.labelLabel = widgets.Label(value='Figure Label Settings',layout=flex_layout_h(98))
-        self.upperLeftSelect = widgets.Dropdown(value='bias',options=['none','channel','bias','setpoint','feedback','date','filename','scalebar'],description='UL:',layout=flex_layout_h(98),style={'description_width':'40px'})
-        self.upperRightSelect = widgets.Dropdown(value='filename',options=['none','channel','bias','setpoint','feedback','date','filename','scalebar'],description='UR:',layout=flex_layout_h(98),style={'description_width':'40px'})
-        self.lowerLeftSelect = widgets.Dropdown(value='none',options=['none','channel','bias','setpoint','feedback','date','filename','scalebar'],description='LL:',layout=flex_layout_h(98),style={'description_width':'40px'})
-        self.lowerRightSelect = widgets.Dropdown(value='scalebar',options=['none','channel','bias','setpoint','feedback','date','filename','scalebar'],description='LR:',layout=flex_layout_h(98),style={'description_width':'40px'})
+        self.upperLeftSelect = widgets.Dropdown(value='bias',options=label_options,description='UL:',layout=flex_layout_h(98),style={'description_width':'40px'})
+        self.upperRightSelect = widgets.Dropdown(value='filename',options=label_options,description='UR:',layout=flex_layout_h(98),style={'description_width':'40px'})
+        self.lowerLeftSelect = widgets.Dropdown(value='none',options=label_options,description='LL:',layout=flex_layout_h(98),style={'description_width':'40px'})
+        self.lowerRightSelect = widgets.Dropdown(value='scalebar',options=label_options,description='LR:',layout=flex_layout_h(98),style={'description_width':'40px'})
         self.labelColorSelect = widgets.ColorPicker(concise=True,description='Color:',value='orange',layout=flex_layout_h(98),style={'description_width':'40px'})
         self.labelFontSize = widgets.IntText(description='size:',value=20,tooltip='change label font size',style={'description_width':'40px'},layout=flex_layout(98))
         
@@ -559,6 +560,12 @@ class imageBrowser():
                 scalebar = AnchoredSizeBar(ax.transAxes, actual_length_per,label,align,frameon = False,color=color,label_top=True,sep=1,pad=1,fontproperties=self.font,size_vertical=1e-2)
                 ax.add_artist(scalebar)
                 continue
+            elif selection == 'filters':
+                text = []
+                if self.gaussianToggle.value: text.append('G')
+                if self.medianToggle.value: text.append('M')
+                if self.laplacToggle.value: text.append('LP')
+                text = '+'.join(text)
             # add text to axes
             if align == 'upper left':
                 ax.text(x_pos,y_pos,text,fontsize=self.labelFontSize.value,verticalalignment='top',horizontalalignment='left',color=color) #,backgroundcolor='black'
