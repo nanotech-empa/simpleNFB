@@ -123,7 +123,7 @@ class spectrumBrowser():
         flex_layout_h = lambda x: widgets.Layout(visibility='hidden',display='flex',width=f'{x}%')
         
         ### selections ###
-        self.rootFolder = widgets.Text(description='',layout=widgets.Layout(dispaly='flex',width='90%'))
+        self.rootFolder = widgets.Text(description='',layout=widgets.Layout(dispaly='flex',width='95%'))
         self.directorySelection = widgets.Select(options=self.directories,rows=8,layout=flex_layout(98))
         self.directoryDisplayDepth = widgets.Dropdown(description='depth',value=1,options=['full',1,2,3,4,5],tooltip='depth of the folder structure displayed in the selection menu',layout=flex_layout_btn(75),style={'description_width':'40px'})
         self.selectionList = widgets.SelectMultiple(options=self.dat_files,value=[],description='',rows=30,layout=flex_layout(98))
@@ -131,21 +131,15 @@ class spectrumBrowser():
         self.newFilterText = widgets.Text(description='',tooltip='user defined string to use for file filtering',layout=flex_layout(50))
         self.addFilterBtn = widgets.Button(description='+',tooltip='click to add new filter to selection',layout=flex_layout_btn(24))
     
-        self.channelXSelect = widgets.Dropdown(options=['Index'],value=None,description='X:')
-        self.channelYSelect = widgets.SelectMultiple(options=[None],value=[None],description='Y:',rows=5)
-
-        #self.channelXSelect = widgets.Dropdown(options=['V'],value='V',description='X:')
-        #self.channelYSelect = widgets.SelectMultiple(options=['I'],value=['I'],description='Y:',rows=3)
-        
-        #self.channelYSelect.add_class("left-spacing-class")
-        #display(HTML("<style>.left-spacing-class {margin-left: 10px;}</style>"))
+        self.channelXSelect = widgets.Dropdown(options=['Index'],value=None,description='X',layout=flex_layout(98),style={'description_width':'30px'})
+        self.channelYSelect = widgets.SelectMultiple(options=[None],value=[None],description='Y',rows=5,layout=flex_layout(98),style={'description_width':'30px'})
 
         self.refreshBtn = Btn_Widget('',icon='refresh',tooltip='Reload file list',layout=layout(30))
         # text display
         self.filenameText = Text_Widget('')
         self.indexText = Text_Widget('0')
         self.errorText = Selection_Widget([],'Out:',rows=5)
-        self.saveNote = Text_Widget('',description='note:')
+        self.saveNote = Text_Widget('',description='note',layout=flex_layout(98),style={'description_width':'30px'})
         # image display
         self.nextBtn = Btn_Widget('',layout=layout(30),icon='arrow-circle-down',tooltip='Load next file in list')
         self.previousBtn = Btn_Widget('',layout=layout(30),icon='arrow-circle-up',tooltip='Load previous file in list')
@@ -158,18 +152,15 @@ class spectrumBrowser():
         self.copyBtn = Btn_Widget('',layout=layout(30),icon='clipboard',tooltip='Save displayed image to \\browser_output folder\ncopy displayed image to clipboard')
         self.csvBtn = Btn_Widget('',layout=layout(30),icon='list-ul',tooltip='Save displayed data to \\browser_output folder\ndata saved as .csv')
         self.generateWaterFallBtn = Btn_Widget('Waterfall',disabled=True)
-        self.figure_display = widgets.Output()
+        self.figure_display = widgets.Output(layout=flex_layout_btn(99))
         self.legendBtn = widgets.ToggleButton(description='',value=True,layout=layout(30),icon='tags',tooltip='Toggle display of the plot legend\nDefault is active')
-        #self.wfFigure_display = widgets.Output()
-        #self.figure_tabs = widgets.Tab(children=[self.figure_display])
-        #self.figure_tabs.titles = ['Line Spectrum', 'Waterfall']
 
         # offset options
         self.offsetBtn = widgets.ToggleButton(description='',value=False,layout=layout(30),icon='navicon',tooltip='Apply vertical offset')
         self.offset_value = widgets.FloatText(value=0.1e-12,description='offset:',step=.1e-12,readout_format='.1e',layout=largeLayout)
         # colormap
-        self.cmapSelection = widgets.Dropdown(description='colormap:',options=plt.colormaps(),value=cmap,layout=layout(200))
-        self.markerSelection = widgets.Dropdown(description='plotMarker:',options=['N','o','*','s','^','X'],value='o',layout=layout(200))
+        self.cmapSelection = widgets.Dropdown(description='colormap:',options=plt.colormaps(),value=cmap,layout=flex_layout(98),style={'description_width':'80px'})
+        self.markerSelection = widgets.Dropdown(description='marker:',options=['N','o','*','s','^','X'],value='o',layout=flex_layout(98),style={'description_width':'80px'})
 
         # smoothing options
         self.smoothBtn = widgets.ToggleButton(description='',value=False,layout=layout(30),icon='filter',tooltip='Apply savitzky-golay filter to plot data')
@@ -178,83 +169,81 @@ class spectrumBrowser():
         # settings menu toggle
         self.settingsBtn = widgets.ToggleButton(description='',icon='gear',value=False,tooltip='Display figure title options panel',layout=layout(30))
         # figure title options
-        self.titleLabel = widgets.Label(value='Figure Title Settings',layout=layout(150))
-        self.titleToggle = widgets.ToggleButton(value=True, description='Show Title',tooltip='Toggle figure title',layout=layout(150))
-        self.setpointToggle = widgets.ToggleButton(value=True,description='Setpoint',layout=layout(150))
-        self.feedbackToggle = widgets.ToggleButton(value=True,description='Feedback',layout=layout(150))
-        self.locationToggle = widgets.ToggleButton(value=True,description='file location',layout=layout(150))
-        self.depthSelection = widgets.Dropdown(value='full',options=['full',1,2,3,4,5],description='Depth:',tooltip='folder depth to display in location section of the image title',layout=layout(150),style={'description_width':'initial'})
-        self.nameToggle = widgets.ToggleButton(value=True,description='Filename',layout=layout(150))
-        self.dateToggle = widgets.ToggleButton(value=True,description='Date',layout=layout(150))
+        self.titleLabel = widgets.Label(value='Figure Title Settings',layout=flex_layout_btn(98))
+        self.titleToggle = widgets.ToggleButton(value=True, description='Show Title',tooltip='Toggle figure title',layout=flex_layout_btn(98))
+        self.setpointToggle = widgets.ToggleButton(value=True,description='Setpoint',layout=flex_layout_btn(98))
+        self.feedbackToggle = widgets.ToggleButton(value=True,description='Feedback',layout=flex_layout_btn(98))
+        self.locationToggle = widgets.ToggleButton(value=True,description='file location',layout=flex_layout_btn(98))
+        self.depthSelection = widgets.Dropdown(value='full',options=['full',1,2,3,4,5],description='Depth:',tooltip='folder depth to display in location section of the image title',layout=flex_layout_btn(98),style={'description_width':'initial'})
+        self.nameToggle = widgets.ToggleButton(value=True,description='Filename',layout=flex_layout_btn(98))
+        self.dateToggle = widgets.ToggleButton(value=True,description='Date',layout=flex_layout_btn(98))
         # legend settings
-        self.legendLabel = widgets.Label(value='Legend Settings',layout=layout_h(150))
-        self.defaultLegendToggle = widgets.ToggleButton(value=True,description='default',tooltip='Toggle to enable the default Legend using filenames as labels',layout=layout(150))
-        self.customLegendToggle = widgets.ToggleButton(value=False,description='custom',tooltip='Toggle to enable a custom Legend with user defined labels',layout=layout(150))
-        self.legendText = widgets.Select(value='',options=[''],rows=5,layout=layout(150),disabled=False)
+        self.defaultLegendToggle = widgets.ToggleButton(value=True,description='default',tooltip='Toggle to enable the default Legend using filenames as labels',layout=flex_layout_btn(48))
+        self.customLegendToggle = widgets.ToggleButton(value=False,description='custom',tooltip='Toggle to enable a custom Legend with user defined labels',layout=flex_layout_btn(48))
+        self.legendText = widgets.Select(value='',options=[''],rows=5,layout=flex_layout(98),disabled=False)
         # The above code is accessing the `legendEntry` attribute of the `self` object in Python.
-        self.legendEntry = widgets.Text(description='',tooltip='enter new legend text here',layout=layout(150),disabled=False)
-        self.legendToggle = widgets.ToggleButton(value=True,description='legend',layout=layout(74))
-        self.legendUpdate = widgets.Button(description='Update',tooltip='Press to update selected legend entry with new text',layout=layout(74),disabled=False)
+        self.legendEntry = widgets.Text(description='',tooltip='enter new legend text here',layout=flex_layout(98),disabled=False)
+        self.legendToggle = widgets.ToggleButton(value=True,description='legend',layout=flex_layout_btn(48))
+        self.legendUpdate = widgets.Button(description='Update',tooltip='Press to update selected legend entry with new text',layout=flex_layout_btn(48),disabled=False)
         # data filter settings
-        self.filterLabel = widgets.Label(value='Data Filter Settings',layout=layout(150))
-        self.offsetToggle = widgets.ToggleButton(value=False,description='Offset',tooltip='Apply a vertical offset to each line in dataset',layout=layout(150))
-        self.offsetSize = widgets.FloatText(value=0.1e-12,description='amount:',step=.1e-12,readout_format='.1e',layout=layout(150),style={'description_width':'initial'})
-        self.svgToggle = widgets.ToggleButton(value=False,description='Savitsky-Golay',layout=layout(150))
-        self.svgSize = widgets.BoundedIntText(description='window:',value=3,min=3,max=101,step=2,layout=layout(150))
-        self.svgOrder = widgets.BoundedIntText(description='order:',value=1,min=1,max=5,step=1,layout=layout(150))
-        self.medFiltBtn = widgets.ToggleButton(description='Median',value=False,layout=layout(90),tooltip='Apply median filter to plot data')
-        self.medFiltSize = widgets.BoundedIntText(description='',value=3,min=3,max=21,step=2,layout=layout(60))
-        self.thresholdToggle = widgets.ToggleButton(value=False,description='Threshold',tooltip='enable to cut out values above threshold value',layout=layout(150))
-        self.thresholdValue = widgets.FloatText(value=100,description='value:',layout=layout(150))
-        self.averageToggle = widgets.ToggleButton(value=False,description='Average',tooltip='enable to plot average of all selected spectra, uses np.quantile to remove outliers',layout=layout(150))
-        self.groupSize = widgets.BoundedIntText(description='Group:',value=3,min=3,max=20,step=1,tooltip='defines the group size used in batched averaging',layout=layout(150))
+        self.offsetToggle = widgets.ToggleButton(value=False,description='Offset',tooltip='Apply a vertical offset to each line in dataset',layout=flex_layout_btn(98))
+        self.offsetSize = widgets.FloatText(value=0.1e-12,description='amount:',step=.1e-12,readout_format='.1e',layout=flex_layout(98),style={'description_width':'50px'})
+        self.svgToggle = widgets.ToggleButton(value=False,description='Savitsky-Golay',layout=flex_layout_btn(98))
+        self.svgSize = widgets.BoundedIntText(description='window:',value=3,min=3,max=101,step=2,layout=flex_layout(98),style={'description_width':'50px'})
+        self.svgOrder = widgets.BoundedIntText(description='order:',value=1,min=1,max=5,step=1,layout=flex_layout(98),style={'description_width':'50px'})
+        self.medFiltBtn = widgets.ToggleButton(description='Median',value=False,layout=flex_layout_btn(74),tooltip='Apply median filter to plot data')
+        self.medFiltSize = widgets.BoundedIntText(description='',value=3,min=3,max=21,step=2,layout=flex_layout_btn(24))
+        self.thresholdToggle = widgets.ToggleButton(value=False,description='Threshold',tooltip='enable to cut out values above threshold value',layout=flex_layout_btn(98))
+        self.thresholdValue = widgets.FloatText(value=100,description='value:',layout=flex_layout(98),style={'description_width':'50px'})
+        self.averageToggle = widgets.ToggleButton(value=False,description='Average',tooltip='enable to plot average of all selected spectra, uses np.quantile to remove outliers',layout=flex_layout_btn(98))
+        self.groupSize = widgets.BoundedIntText(description='Group:',value=3,min=3,max=20,step=1,tooltip='defines the group size used in batched averaging',layout=flex_layout(98),style={'description_width':'50px'})
         # plotting modes settings
-        self.stmlToggle = widgets.ToggleButton(value=False,description='STML Mode',tooltip='Convert bottom axis to energy\nadd top axis in wavelength\nscale intensity to current x time',layout=layout(150))
-        self.normalizeTimeBtn = widgets.ToggleButton(value=True,description='Norm. Time',tooltip='Normalize intensity to current x time',layout=layout(150))
-        self.normalizeCurrentBtn = widgets.ToggleButton(value=True,description='Norm. Current',tooltip='Normalize intensity to current x current',layout=layout(150))
-        self.normalizeEnergyBtn = widgets.ToggleButton(value=True,description='Norm. Energy',tooltip='Normalize intensity to current x energy',layout=layout(150)) 
-        self.normalizePlasmonBtn = widgets.ToggleButton(value=False,description='Norm. Plasmon',tooltip='Normalize intensity to plasmon intensity',layout=layout(150))
-        self.plasmonReference = widgets.Dropdown(options=['None'],value='None',description='Plasmon:',layout=layout(150),style={'description_width':'40px'})
+        self.stmlToggle = widgets.ToggleButton(value=False,description='STML Mode',tooltip='Convert bottom axis to energy\nadd top axis in wavelength\nscale intensity to current x time',layout=flex_layout_btn(98))
+        self.normalizeTimeBtn = widgets.ToggleButton(value=True,description='Norm. Time',tooltip='Normalize intensity to current x time',layout=flex_layout_btn(98))
+        self.normalizeCurrentBtn = widgets.ToggleButton(value=True,description='Norm. Current',tooltip='Normalize intensity to current x current',layout=flex_layout_btn(98))
+        self.normalizeEnergyBtn = widgets.ToggleButton(value=True,description='Norm. Energy',tooltip='Normalize intensity to current x energy',layout=flex_layout_btn(98)) 
+        self.normalizePlasmonBtn = widgets.ToggleButton(value=False,description='Norm. Plasmon',tooltip='Normalize intensity to plasmon intensity',layout=flex_layout_btn(98))
+        self.plasmonReference = widgets.Dropdown(options=['None'],value='None',description='Plasmon:',layout=flex_layout(98),style={'description_width':'60px'})
         # axes controls
-        self.xLimitsBtn = widgets.Button(description='Update X',tooltip='Set X axis limits',layout=layout(110))
-        self.xLimitsMin = widgets.FloatText(value=-1,description='Min.',layout=layout(150),style={'description_width':'40px'})
-        self.xLimitsMax = widgets.FloatText(value=1,description='Max.',layout=layout(150),style={'description_width':'40px'})
-        self.yLimitsBtn = widgets.Button(description='Update Y',tooltip='Set Y axis limits',layout=layout(110))
-        self.yLimitsMin = widgets.FloatText(value=-1,description='Min.',layout=layout(150),style={'description_width':'40px'})
-        self.yLimitsMax = widgets.FloatText(value=1,description='Max.',layout=layout(150),style={'description_width':'40px'})
-        self.xLimitLock = widgets.ToggleButton(value=False,description='',icon='lock',tooltip='Lock X axis limits when loading new data',layout=layout(35))
-        self.yLimitLock = widgets.ToggleButton(value=False,description='',icon='lock',tooltip='Lock X axis limits when loading new data',layout=layout(35))
+        self.xLimitsBtn = widgets.Button(description='Update X',tooltip='Set X axis limits',layout=flex_layout_btn(74))
+        self.xLimitsMin = widgets.FloatText(value=-1,description='Min',layout=flex_layout(98),style={'description_width':'25px'})
+        self.xLimitsMax = widgets.FloatText(value=1,description='Max',layout=flex_layout(98),style={'description_width':'25px'})
+        self.yLimitsBtn = widgets.Button(description='Update Y',tooltip='Set Y axis limits',layout=flex_layout_btn(74))
+        self.yLimitsMin = widgets.FloatText(value=-1,description='Min',layout=flex_layout(98),style={'description_width':'25px'})
+        self.yLimitsMax = widgets.FloatText(value=1,description='Max',layout=flex_layout(98),style={'description_width':'25px'})
+        self.xLimitLock = widgets.ToggleButton(value=False,description='',icon='lock',tooltip='Lock X axis limits when loading new data',layout=flex_layout_btn(24))
+        self.yLimitLock = widgets.ToggleButton(value=False,description='',icon='lock',tooltip='Lock X axis limits when loading new data',layout=flex_layout_btn(24))
 
         # layouts
         self.h_new_filter_layout = HBox(children=[widgets.Label('New',layout=flex_layout_btn(24)),self.newFilterText,self.addFilterBtn])
         self.v_filter_layout = VBox(children=[widgets.Label('Filter',layout=flex_layout(50)),self.filterSelection,self.h_new_filter_layout])
         self.v_text_layout = VBox(children=[self.saveNote,self.errorText])
-        self.h_process_layout = HBox(children=[self.flattenBtn,self.fixZeroBtn,self.referenceLocBtn,self.plot2DBtn])
-        self.h_selection_btn_layout = HBox(children=[self.refreshBtn,self.csvBtn,self.saveBtn,self.copyBtn,self.settingsBtn])
+        self.h_process_layout = HBox(children=[self.flattenBtn,self.fixZeroBtn,self.referenceLocBtn,self.plot2DBtn],layout=flex_layout(98))
+        self.h_selection_btn_layout = HBox(children=[self.refreshBtn,self.csvBtn,self.saveBtn,self.copyBtn,self.settingsBtn],layout=flex_layout(98))
 
-        self.v_channel_layout = VBox(children=[self.channelXSelect,self.channelYSelect,self.saveNote])
+        self.v_channel_layout = VBox(children=[self.channelXSelect,self.channelYSelect,self.saveNote],layout=flex_layout(48))
         self.v_file_select_layout = VBox(children=[HBox(children=[widgets.Label('Folder',layout=flex_layout(24)),self.directoryDisplayDepth],layout=flex_layout(98)),
                                                    self.directorySelection,
                                                    widgets.Label('Files',layout=flex_layout(50)),
                                                    self.selectionList,self.v_filter_layout],
                                                    layout=flex_layout(20))
         
-        self.v_btn_layout = VBox(children=[self.h_selection_btn_layout,self.h_process_layout,self.cmapSelection,self.markerSelection])
-        self.h_user_layout = HBox(children=[self.v_channel_layout,self.v_btn_layout])
+        self.v_btn_layout = VBox(children=[self.h_selection_btn_layout,self.h_process_layout,self.cmapSelection,self.markerSelection],layout=flex_layout(48))
+        self.h_user_layout = HBox(children=[self.v_channel_layout,self.v_btn_layout],layout=flex_layout_btn(98))
 
         self.v_settings_layout = widgets.Accordion(children=[
                                                     VBox(children=[
                                                         HBox(children=[
                                                             self.defaultLegendToggle,
                                                             self.customLegendToggle],
-                                                            layout=layout(150)),
+                                                            layout=flex_layout(98)),
                                                         self.legendText,
                                                         self.legendEntry,
                                                         HBox(children=[
                                                             self.legendToggle,
                                                             self.legendUpdate],
-                                                            layout=layout(150)),],
-                                                        layout=layout_h(180)),
+                                                            layout=flex_layout(98)),],
+                                                        layout=flex_layout_h(98)),
                                                     VBox(children=[
                                                         self.titleToggle,
                                                         self.nameToggle,
@@ -263,7 +252,7 @@ class spectrumBrowser():
                                                         self.locationToggle,
                                                         self.depthSelection,
                                                         self.dateToggle,],
-                                                        layout=layout_h(180)),
+                                                        layout=flex_layout_h(98)),
                                                     VBox(children=[
                                                         self.offsetToggle,
                                                         self.offsetSize,
@@ -273,12 +262,12 @@ class spectrumBrowser():
                                                         HBox(children=[
                                                             self.medFiltBtn,
                                                             self.medFiltSize],
-                                                            layout=layout(150)),
+                                                            layout=flex_layout(98)),
                                                         self.thresholdToggle,
                                                         self.thresholdValue,
                                                         self.averageToggle,
                                                         self.groupSize],
-                                                        layout=layout_h(180)),
+                                                        layout=flex_layout_h(98)),
                                                     VBox(children=[
                                                         self.stmlToggle,
                                                         self.normalizeTimeBtn,
@@ -286,27 +275,28 @@ class spectrumBrowser():
                                                         self.normalizeEnergyBtn,
                                                         self.normalizePlasmonBtn,
                                                         self.plasmonReference],
-                                                        layout=layout_h(180)),
-                                                    VBox(children=[
-                                                        self.xLimitsMin,
-                                                        self.xLimitsMax,
+                                                        layout=flex_layout_h(98)),
+                                                    VBox(children=[self.xLimitsMin,
+                                                                   self.xLimitsMax,
                                                         HBox(children=[
                                                             self.xLimitsBtn,self.xLimitLock],
-                                                            layout=layout(150)),
+                                                            layout=flex_layout(98)),
                                                         self.yLimitsMin,
                                                         self.yLimitsMax,
                                                         HBox(children=[
                                                             self.yLimitsBtn,
                                                             self.yLimitLock],
-                                                            layout=layout(150)),],
-                                                        layout=layout_h(180)),
+                                                            layout=flex_layout(98)),],
+                                                        layout=flex_layout_h(98)),
                                                     ],
-                                                    layout=layout_h(220),
+                                                    layout=flex_layout_h(20),
                                                     titles=['Legend Settings','Title Settings','Filter Settings','STML Mode','Axes Controls'])
 
-        self.v_image_layout = VBox(children=[self.figure_display,self.h_user_layout])
+        self.v_image_layout = VBox(children=[self.figure_display,self.h_user_layout],layout=flex_layout_btn(60))
         self.h_main_layout = VBox(children=[HBox(children=[widgets.Label('Session',layout=widgets.Layout(display='flex',justify_content='flex-start',width='5%')),
-                                                        self.rootFolder],layout=flex_layout(99)),HBox(children=[self.v_file_select_layout,self.v_image_layout,self.v_settings_layout],layout=flex_layout(99))],layout=flex_layout(100))
+                                                        self.rootFolder],layout=flex_layout(99)),
+                                                        HBox(children=[self.v_file_select_layout,self.v_image_layout,self.v_settings_layout],layout=flex_layout(99))],
+                                                        layout=flex_layout(100))
 
         # connect widgets to functions
         self.groupSize.observe(self.update_legend_settings,names='value')
@@ -362,18 +352,15 @@ class spectrumBrowser():
         self.plasmonReference.observe(self.handler_update_plasmonic_reference,names='value')
 
 
+        self.display()
         with self.figure_display:
             self.figure_display.clear_output(wait=True)
             plt.show(self.figure)
 
-        self.display()
-        #with self.wfFigure_display:
-            #plt.show(self.wfFigure)
-        self.find_directories(self.active_dir)
-        self.update_directories('a')
+        
     # show browser
     def display(self):
-        #display.clear_output(wait=True)
+        display.clear_output(wait=True)
         display.display(self.h_main_layout)
     
     def find_directories(self,_path):
@@ -1010,7 +997,7 @@ class spectrumBrowser():
             self.directories = [self.active_dir]
             self.active_dir = Path(new_root)
             self.find_directories(self.active_dir)
-            self.update_directories('a')
+            self.update_directories(a)
         if type(a) == type(self.refreshBtn): 
             self.directorySelection.value = current_directory
             #self.selectionList.value = current_file

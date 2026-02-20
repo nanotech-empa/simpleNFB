@@ -102,7 +102,7 @@ class imageBrowser():
         self.rootFolder = widgets.Text(description='',layout=widgets.Layout(dispaly='flex',width='90%'))
         self.directorySelection = widgets.Select(description='',options=self.directories,rows=8,layout=flex_layout(98))
         self.selectionList = widgets.Select(description='',options=self.sxm_files,rows=27,layout=flex_layout(98))
-        
+        self.directoryDisplayDepth = widgets.Dropdown(description='depth',value=1,options=['full',1,2,3,4,5],tooltip='depth of the folder structure displayed in the selection menu',layout=flex_layout_btn(75),style={'description_width':'40px'})
         #self.channelSelect = Selection_Widget(['z'],'Channels:',rows=5)
         self.channelSelect = widgets.Dropdown(description='',layout=layout(165))
         self.refreshBtn = Btn_Widget('',icon='refresh',tooltip='Reload file list',layout=flex_layout_btn(24))
@@ -178,7 +178,8 @@ class imageBrowser():
         self.h_channel_layout = HBox(children=[widgets.Label('Channel'),self.channelSelect])
         self.v_color_layout = VBox(children=[HBox(children=[self.vmin,self.vmax]),self.cmapSelection])
         self.h_user_layout = HBox(children=[VBox(children=[self.h_channel_layout,self.h_process_btn_layout]),self.v_color_layout],layout=flex_layout_btn(100))
-        self.v_file_layout = VBox(children=[widgets.Label('Folders'),self.directorySelection,
+        self.v_file_layout = VBox(children=[HBox(children=[widgets.Label('Folder',layout=flex_layout(24)),self.directoryDisplayDepth],layout=flex_layout(98)),
+                                            self.directorySelection,
                                             widgets.Label('Images'),self.selectionList,
                                             VBox(children=[HBox(children=[self.refreshBtn,self.saveBtn,self.copyBtn,self.configOptionBtn]),
                                                            widgets.Label('Note')]),
@@ -237,6 +238,7 @@ class imageBrowser():
         self.vmax.observe(self.updateDisplayImage,names='value')
 
         ## selection events
+        self.directoryDisplayDepth.observe(self.update_directories,names=['value'])
         self.nextBtn.on_click(self.nextDisplay)
         self.previousBtn.on_click(self.previousDisplay)
         self.refreshBtn.on_click(self.handler_root_folder_update)
@@ -274,8 +276,12 @@ class imageBrowser():
             pass
         self.directories.extend(directories)
         return directories
-    def update_directories(self):
-        display_directories = ['\\'.join(str(directory).split('\\')[-1:]) for directory in self.directories]
+    def update_directories(self,a):
+        if self.directoryDisplayDepth.value == 'full':
+            depth = 0
+        else:
+            depth = -self.directoryDisplayDepth.value
+        display_directories = ['\\'.join(str(directory).split('\\')[depth:]) for directory in self.directories]
         display_directories[0] = 'session folder'
         self.directorySelection.options = display_directories
     def copy_figure(self,a):
@@ -651,7 +657,7 @@ class imageBrowser():
             self.directories = [self.active_dir]
             self.active_dir = Path(new_root)
             self.find_directories(self.active_dir)
-            self.update_directories()
+            self.update_directories(a)
         if type(a) == type(self.refreshBtn): 
             self.directorySelection.value = current_directory
             #self.selectionList.value = current_file
