@@ -69,7 +69,9 @@ class imageBrowser():
     '''
     def __init__(self,figsize=(6,6),fontsize=12,titlesize=12,cmap='Greys_r',home_directory='./'):
         self.img = None
-        self.figure,self.axes = plt.subplots(ncols=1,figsize=figsize,num='sxm') # simple default figure size
+        self.figure,self.axes = plt.subplots(ncols=1,num='sxm') # simple default figure size
+        self.figure.canvas.header_visible = False
+        #self.figure.canvas.layout = widgets.Layout(display='flex',width=f'9%',align_items='center',justify_content='center')
         self.fontsize = fontsize
         self.font = fm(size=fontsize,family='sans-serif')
         self.titlesize = titlesize
@@ -215,6 +217,9 @@ class imageBrowser():
                                          HBox(children=[self.v_file_layout,self.v_image_layout,self.v_settings_layout],layout=flex_layout(99))],
                                          layout=flex_layout(100))
 
+        ### configure scaling behavior
+        self.v_settings_layout.layout.min_width = '200px'
+        self.v_file_layout.layout.min_width = '200px'
         ## Display and output events
         #### connect config panel widgets to functions
         for child in self.v_settings_layout.children:
@@ -252,9 +257,10 @@ class imageBrowser():
         #self.figure.canvas.mpl_connect('button_press_event',self.mouse_click)
 
         self.display()
-        with self.figure_display:
-            self.figure_display.clear_output(wait=True)
-            plt.show(self.figure)
+        with plt.ioff():
+            with self.figure_display:
+                self.figure_display.clear_output(wait=True)
+                plt.show(self.figure)
         #self.find_directories(self.active_dir)
         #self.update_directories()
         #self.updateInfoText()

@@ -85,6 +85,7 @@ class spectrumBrowser():
     def __init__(self,figsize=(3.5,2.8),fontsize=8,titlesize=5,cmap='Greys_r',home_directory='./',sxmBrowser=None):
         self.img = None
         self.figure,self.axes = plt.subplots(ncols=1,figsize=figsize,num='dat',dpi=150) # simple default figure size
+        self.figure.canvas.header_visible = False
         self.axes2 = None
         self.cb = None
         self.sxmBrowser = sxmBrowser
@@ -298,6 +299,11 @@ class spectrumBrowser():
                                                         HBox(children=[self.v_file_select_layout,self.v_image_layout,self.v_settings_layout],layout=flex_layout(99))],
                                                         layout=flex_layout(100))
 
+
+        ### configure scaling behavior
+        self.v_settings_layout.layout.min_width = '200px'
+        self.v_file_select_layout.layout.min_width = '200px'
+
         # connect widgets to functions
         self.groupSize.observe(self.update_legend_settings,names='value')
         self.averageToggle.observe(self.update_legend_settings,names='value')
@@ -353,9 +359,10 @@ class spectrumBrowser():
 
 
         self.display()
-        with self.figure_display:
-            self.figure_display.clear_output(wait=True)
-            plt.show(self.figure)
+        with plt.ioff():
+            with self.figure_display:
+                self.figure_display.clear_output(wait=True)
+                plt.show(self.figure)
 
         
     # show browser
