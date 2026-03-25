@@ -179,9 +179,11 @@ class spectrumBrowser():
         self.nameToggle = widgets.ToggleButton(value=True,description='Filename',layout=flex_layout_btn(98))
         self.dateToggle = widgets.ToggleButton(value=True,description='Date',layout=flex_layout_btn(98))
         # legend settings
-        self.defaultLegendToggle = widgets.ToggleButton(value=True,description='default',tooltip='Toggle to enable the default Legend using filenames as labels',layout=flex_layout_btn(48))
-        self.customLegendToggle = widgets.ToggleButton(value=False,description='custom',tooltip='Toggle to enable a custom Legend with user defined labels',layout=flex_layout_btn(48))
+        self.defaultLegendToggle = widgets.ToggleButton(value=False,description='default',tooltip='Toggle to enable the default Legend using filenames as labels',layout=flex_layout_btn(30))
+        self.customLegendToggle = widgets.ToggleButton(value=False,description='custom',tooltip='Toggle to enable a custom Legend with user defined labels',layout=flex_layout_btn(30))
+        self.parameterLegendToggle = widgets.ToggleButton(value=True,description='parameter',tooltip='Toggle to enable a Legend with labels based on the metadata parameters of the spectra',layout=flex_layout_btn(30))
         self.legendText = widgets.Select(value='',options=[''],rows=5,layout=flex_layout(98),disabled=False)
+        self.parameterLegendList = widgets.Dropdown(options=['Filename','Z (m)','Current [A]', 'Bias [V]','Exposure Time [ms]','Center Wavelength [nm]','Selected Grating',],value='Filename',description='Parameter:',layout=flex_layout(98),style={'description_width':'80px'})
         # The above code is accessing the `legendEntry` attribute of the `self` object in Python.
         self.legendEntry = widgets.Text(description='',tooltip='enter new legend text here',layout=flex_layout(98),disabled=False)
         self.legendToggle = widgets.ToggleButton(value=True,description='legend',layout=flex_layout_btn(48))
@@ -235,15 +237,16 @@ class spectrumBrowser():
         self.v_settings_layout = widgets.Accordion(children=[
                                                     VBox(children=[
                                                         HBox(children=[
-                                                            self.defaultLegendToggle,
-                                                            self.customLegendToggle],
+                                                            self.parameterLegendToggle,
+                                                            self.customLegendToggle,],
                                                             layout=flex_layout(98)),
                                                         self.legendText,
                                                         self.legendEntry,
                                                         HBox(children=[
                                                             self.legendToggle,
                                                             self.legendUpdate],
-                                                            layout=flex_layout(98)),],
+                                                            layout=flex_layout(98)),
+                                                        self.parameterLegendList,],
                                                         layout=flex_layout_h(98)),
                                                     VBox(children=[
                                                         self.titleToggle,
@@ -693,7 +696,33 @@ class spectrumBrowser():
                 y = y + i*self.offsetSize.value
             y_values[i] = y
 
-        if self.defaultLegendToggle.value:
+        if self.parameterLegendToggle.value:
+            if self.parameterLegendList.value != 'Filename':
+                self.labels = [spec.header[self.parameterLegendList.value] for spec in self.spec]
+                if self.parameterLegendList.value in ['Z (m)','Current [A]', 'Bias [V]','Exposure Time [ms]']:
+                    for i in range(len(self.labels)):
+                        value = self.labels[i]
+                        if self.parameterLegendList.value == 'Z (m)':
+                            value = float(value)*1e9
+                            unit = 'nm'
+                        elif self.parameterLegendList.value == 'Current [A]':
+                            value = float(value)*1e12
+                            unit = 'pA'
+                        elif self.parameterLegendList.value == 'Bias [V]':
+                            value = float(value)
+                            if abs(value) < 0.1:
+                                value = value*1e3
+                                unit = 'mV'
+                            else:
+                                unit = 'V'
+                        elif self.parameterLegendList.value == 'Exposure Time [ms]':
+                            value = float(value)/1000
+                            unit = 's'
+                        else:
+                            unit = ''
+                        self.labels[i] = f'{self.parameterLegendList.value}: {value:.2f} {unit}'
+            else:
+                self.labels = [spec.name for spec in self.spec]
             if self.averageToggle.value and len(self.spec_data) % self.groupSize.value == 0:
                 labels = [self.labels[i] for i in range(0, len(self.labels), self.groupSize.value)]
             else:
@@ -961,14 +990,14 @@ class spectrumBrowser():
 
     def update_legend_mode(self,a):
         print(a)
-        if a['owner'] == self.defaultLegendToggle and a['new'] == True:
+        if a['owner'] == self.parameterLegendToggle and a['new'] == True:
             self.customLegendToggle.value = False
         elif a['owner'] == self.customLegendToggle and a['new'] == True:
-            self.defaultLegendToggle.value = False
+            self.parameterLegendToggle.value = False
         elif a['owner'] == self.groupSize:
             # set legend mode to default if group averaging is not configured properly
             if self.averageToggle.value and len(self.spec_data) % self.groupSize.value != 0:
-                self.defaultLegendToggle.value = True
+                self.parameterLegendToggle.value = True
                 self.customLegendToggle.value = False
         self.updateDisplayImage(a)
     def update_legend_entry(self,a):

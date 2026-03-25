@@ -149,7 +149,7 @@ class imageBrowser():
         self.upperRightSelect = widgets.Dropdown(value='filename',options=label_options,description='UR:',layout=flex_layout_h(98),style={'description_width':'40px'})
         self.lowerLeftSelect = widgets.Dropdown(value='none',options=label_options,description='LL:',layout=flex_layout_h(98),style={'description_width':'40px'})
         self.lowerRightSelect = widgets.Dropdown(value='scalebar',options=label_options,description='LR:',layout=flex_layout_h(98),style={'description_width':'40px'})
-        self.labelColorSelect = widgets.ColorPicker(concise=True,description='Color:',value='orange',layout=flex_layout_h(98),style={'description_width':'40px'})
+        self.labelColorSelect = widgets.ColorPicker(concise=True,description='Color:',value='red',layout=flex_layout_h(98),style={'description_width':'40px'})
         self.labelFontSize = widgets.IntText(description='size:',value=20,tooltip='change label font size',style={'description_width':'40px'},layout=flex_layout(98))
         
         # figure title options
@@ -493,15 +493,25 @@ class imageBrowser():
         w = width*x/col
         h = height*y/row
         axesImage = ax.imshow(data,aspect='equal',origin=imgOrigin,extent=[0,w,0,h],cmap=self.cmapSelection.value,vmin=self.vmin.value,vmax=self.vmax.value) # add cmap and vmin/max
+        ### define colorbar
         if not self.cb:
             divider = make_axes_locatable(ax)
-            cax = divider.append_axes("right", size="5%",pad=0.05)
-            #self.cb = self.figure.colorbar(axesImage,ax=ax,shrink=0.75,pad=.05)
+            cax = divider.append_axes('right',size='3%',pad=0.02)
+            #cax = self.figure.add_axes([ax.get_position().x1*1.08,ax.get_position().y0,ax.get_position().width*0.025,ax.get_position().height/2])
             self.cb = self.figure.colorbar(axesImage,cax=cax)
+            #cax.text(-.07,.45, f'{self.vmin.value:.2f}', fontsize=6,horizontalalignment='center',transform=cax.transAxes) # lower tick
+            #cax.text(1.05,.45, f'{self.vmax.value:.2f}', fontsize=6,horizontalalignment='center',transform=cax.transAxes) # upper tick
+
         else:
             #self.cb.remove()
             self.cb.update_normal(axesImage)# = self.figure.colorbar(axesImage,ax=ax,shrink=0.75,pad=.01)
-        self.cb.set_label(f'{self.channelSelect.value} ({self.image_info["unit"]})',fontsize=self.labelFontSize.value)
+        self.cb.set_label(f'{self.channelSelect.value} ({self.image_info["unit"]})',fontsize=8,labelpad=0,rotation=270)
+        self.cb.set_ticks([self.vmin.value,self.vmax.value])
+        self.cb.set_ticklabels([f'{self.vmin.value:.2f}',f'{self.vmax.value:.2f}'],fontsize=8,rotation=270,verticalalignment='center')
+        self.cb.ax.tick_params(length=0)
+        cb_ticklabels = self.cb.ax.get_yticklabels()
+        cb_ticklabels[0].set_verticalalignment('bottom')
+        cb_ticklabels[1].set_verticalalignment('top')
         ax.set_title(self.scan_info,fontsize=self.titleFontSize.value,loc='left')
         ax.set_xlabel('x (nm)',fontsize=self.labelFontSize.value)
         ax.set_ylabel('y (nm)',fontsize=self.labelFontSize.value)
