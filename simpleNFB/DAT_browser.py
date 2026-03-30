@@ -720,7 +720,7 @@ class spectrumBrowser():
                             unit = 's'
                         else:
                             unit = ''
-                        self.labels[i] = f'{self.parameterLegendList.value}: {value:.2f} {unit}'
+                        self.labels[i] = f'{value:.2f} {unit}'
             else:
                 self.labels = [spec.name for spec in self.spec]
             if self.averageToggle.value and len(self.spec_data) % self.groupSize.value == 0:
@@ -847,11 +847,12 @@ class spectrumBrowser():
                 rx,ry = self.relative_position(self.sxmBrowser.img,spec)
                 rel_positions.append([rx,ry])
                 if self.markerSelection.value != 'N':
-                    ax.plot(rx,ry,marker=self.markerSelection.value,markersize=10,color=colors[k],label=self.labels[k].split('.')[0][-3:])
+                    ax.plot(rx,ry,marker=self.markerSelection.value,markersize=10,color=colors[k])
                 elif self.markerSelection.value == 'N':
                     start = np.max(self.spec_index)-np.min(self.spec_index)+1
                     ax.text(rx,ry,f'{start-i}',color='r',fontsize=10,ha='center',va='center')
                 k += 1
+        fig.canvas.draw()
 
     def plot2D(self,a):
         if len(self.spec) != 0:
@@ -1125,7 +1126,8 @@ class spectrumBrowser():
     def handler_update_axes_limits(self,a):
         if a == self.xLimitsBtn:
             self.axes.set_xlim(self.xLimitsMin.value,self.xLimitsMax.value)
-            self.axes2.set_xlim(1240/self.xLimitsMax.value,1240/self.xLimitsMin.value)
+            if self.axes2 != None:
+                self.axes2.set_xlim(1240/self.xLimitsMax.value,1240/self.xLimitsMin.value)
         elif a == self.yLimitsBtn:
             self.axes.set_ylim(self.yLimitsMin.value,self.yLimitsMax.value)
 ### misc
