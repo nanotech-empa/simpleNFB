@@ -196,6 +196,8 @@ class spectrumBrowser():
         self.svgOrder = widgets.BoundedIntText(description='order:',value=1,min=1,max=5,step=1,layout=flex_layout(98),style={'description_width':'50px'})
         self.medFiltBtn = widgets.ToggleButton(description='Median',value=False,layout=flex_layout_btn(74),tooltip='Apply median filter to plot data')
         self.medFiltSize = widgets.BoundedIntText(description='',value=3,min=3,max=21,step=2,layout=flex_layout_btn(24))
+        self.movingAverageToggle = widgets.ToggleButton(description='Moving Average',value=False,layout=flex_layout_btn(98),tooltip='Apply moving average filter to plot data')
+        self.movingAverageSize = widgets.BoundedIntText(description='',value=3,min=3,max=20,step=1,layout=flex_layout_btn(24))
         self.thresholdToggle = widgets.ToggleButton(value=False,description='Threshold',tooltip='enable to cut out values above threshold value',layout=flex_layout_btn(98))
         self.thresholdValue = widgets.FloatText(value=100,description='value:',layout=flex_layout(98),style={'description_width':'50px'})
         self.averageToggle = widgets.ToggleButton(value=False,description='Average',tooltip='enable to plot average of all selected spectra, uses np.quantile to remove outliers',layout=flex_layout_btn(98))
@@ -207,6 +209,8 @@ class spectrumBrowser():
         self.normalizeEnergyBtn = widgets.ToggleButton(value=True,description='Norm. Energy',tooltip='Normalize intensity to current x energy',layout=flex_layout_btn(98)) 
         self.normalizePlasmonBtn = widgets.ToggleButton(value=False,description='Norm. Plasmon',tooltip='Normalize intensity to plasmon intensity',layout=flex_layout_btn(98))
         self.plasmonReference = widgets.Dropdown(options=['None'],value='None',description='Plasmon:',layout=flex_layout(98),style={'description_width':'60px'})
+        self.subtractNoiseBtn = widgets.ToggleButton(value=False,description='Subtract Noise',tooltip='Subtract a constant noise level from the data',layout=flex_layout_btn(98))
+        self.noiseLevel = widgets.FloatText(value=0,description='Level:',layout=flex_layout(98),style={'description_width':'60px'})
         # axes controls
         self.xLimitsBtn = widgets.Button(description='Update X',tooltip='Set X axis limits',layout=flex_layout_btn(74))
         self.xLimitsMin = widgets.FloatText(value=-1,description='Min',layout=flex_layout(98),style={'description_width':'25px'})
@@ -267,6 +271,10 @@ class spectrumBrowser():
                                                             self.medFiltBtn,
                                                             self.medFiltSize],
                                                             layout=flex_layout(98)),
+                                                        HBox(children=[
+                                                            self.movingAverageToggle,
+                                                            self.movingAverageSize],
+                                                            layout=flex_layout(98)),
                                                         self.thresholdToggle,
                                                         self.thresholdValue,
                                                         self.averageToggle,
@@ -278,7 +286,9 @@ class spectrumBrowser():
                                                         self.normalizeCurrentBtn,
                                                         self.normalizeEnergyBtn,
                                                         self.normalizePlasmonBtn,
-                                                        self.plasmonReference],
+                                                        self.plasmonReference,
+                                                        self.subtractNoiseBtn,
+                                                        self.noiseLevel],
                                                         layout=flex_layout_h(98)),
                                                     VBox(children=[self.xLimitsMin,
                                                                    self.xLimitsMax,
@@ -319,7 +329,8 @@ class spectrumBrowser():
 
         self.medFiltBtn.observe(self.redraw_image,names='value')
         self.medFiltSize.observe(self.redraw_image,names='value')
-        
+        self.movingAverageToggle.observe(self.redraw_image,names='value')
+        self.movingAverageSize.observe(self.redraw_image,names='value')
         self.defaultLegendToggle.observe(self.update_legend_mode,names='value')
         self.customLegendToggle.observe(self.update_legend_mode,names='value')
         self.legendToggle.observe(self.handler_settingsChange,names='value')
@@ -523,6 +534,8 @@ class spectrumBrowser():
             for i,spec in enumerate(self.spec):
                 time = float(spec.header['Exposure Time [ms]'])/1000 # convert to seconds
                 normfactor = 1
+                if self.subtractNoiseBtn.value:
+                    self.spec_data[i] *= (self.spec_data[i] > self.noiseLevel.value)
                 if self.normalizeTimeBtn.value:
                     normfactor *= time
                 if self.normalizeCurrentBtn.value:
@@ -690,6 +703,8 @@ class spectrumBrowser():
                 y = self.smooth_data(y)
             if self.medFiltBtn.value:
                 y = medfilt(y,self.medFiltSize.value)
+            if self.movingAverageToggle.value:
+                y = self.moving_average(y,window_size=self.movingAverageSize.value)
             if self.flattenBtn.value:
                 y = y / np.max(y)
             if self.offsetToggle.value:
@@ -893,6 +908,13 @@ class spectrumBrowser():
             
         else:
             pass
+    def moving_average(self,data,window_size=3):
+
+        averaged_data = np.convolve(data, np.ones(window_size)/window_size, mode='same')
+        average_diff = np.abs(averaged_data - data)/np.abs(data)
+        threshold = 0.9  # Adjust the multiplier as needed
+        return averaged_data*(average_diff < threshold) + data*(average_diff >= threshold)
+    
     def group_average(self):
         group_size = self.groupSize.value
         data = self.spec_data # list of arrays
@@ -904,7 +926,8 @@ class spectrumBrowser():
             median_average = []
             for element_group in zip(*group):
                 medians = np.sort(medfilt(element_group,3))
-                medians = medians[0:-1] # remove max
+                if medians[-1] > 1.5*np.average(medians[0:-1]):
+                    medians = medians[0:-1] # remove max
                 median_average.append(np.average(medians))
             group_averaged.append(np.array(median_average))
         return grouped_x,group_averaged
