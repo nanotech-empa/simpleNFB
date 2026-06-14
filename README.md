@@ -16,6 +16,12 @@ jupyter_launch_script.bat can be used to directly open jupyter notebooks from th
  4. "jupyter_launch_script.bat" (user or pc version depending on Anaconda installation)
 
 ## Installing simpleNFB on your computer and running it using a global Python environment
+    * Simple Install
+    - open command prompt
+    - (optional) activate preferred envionrment -- currently works with python 3.13
+        pip install "git+https://github.com/nanotech-empa/simpleNFB.git@refactor"
+
+    * Involved Install
     - Install GitHub desktop on your computer (https://desktop.github.com/download/)
     - Clone this repository from the internet (https://github.com/nanotech-empa/simpleNFB)
     - Verfiy the repository was installed on your computer (C:\Users\username\Documents\GitHub\simpleNFB)
