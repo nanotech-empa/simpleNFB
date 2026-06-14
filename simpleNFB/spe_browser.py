@@ -1,16 +1,14 @@
 import os
 import sys
-import spe_loader
+from . import spe_loader
 from IPython import display
 from IPython.display import HTML
 import ipywidgets as widgets
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import medfilt,savgol_filter
-import importlib
 import subprocess
 from pathlib import Path
-importlib.reload(spe_loader)
 
 class Spe_Browser():
     def __init__(self,standalone=True):

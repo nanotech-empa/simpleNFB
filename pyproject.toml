@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "simpleNFB"
+version = "0.1.0"
+description = "Jupyter widget browsers for Nanonis SXM and DAT spectroscopy data"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+dependencies = [
+    "ipywidgets>=8.0",
+    "matplotlib>=3.5",
+    "numpy>=1.23",
+    "scipy>=1.9",
+    "Pillow>=9.0",
+    "spmpy @ git+https://github.com/nanotech-empa/spmpy.git",
+]
+
+[project.optional-dependencies]
+clipboard = ["pywin32>=306"]   # Windows clipboard support in copy_figure
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["simpleNFB*"]
+exclude = ["simpleNFB.support_scripts*", "simpleNFB.spmpy*"]
