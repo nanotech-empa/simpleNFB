@@ -23,7 +23,7 @@ from .process_utils import remove_line_average
 from .widget_helpers import HBox, VBox, Btn_Widget, Text_Widget, Selection_Widget
 
 
-class imageBrowser(BaseBrowser):
+class fileBrowser(BaseBrowser):
     '''
     Interactive browser for Nanonis SXM image data.
 

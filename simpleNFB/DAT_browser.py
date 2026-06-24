@@ -26,7 +26,7 @@ from .process_utils import (rebin_intensity_nm_to_ev, smooth_data, group_average
 from .widget_helpers import HBox, VBox, Btn_Widget, Text_Widget, Selection_Widget
 
 
-class spectrumBrowser(BaseBrowser):
+class fileBrowser(BaseBrowser):
     '''
     Interactive browser for Nanonis DAT spectroscopy data.
 
@@ -66,15 +66,22 @@ class spectrumBrowser(BaseBrowser):
         mpl.rcParams['axes.labelsize']      = 7
 
         # --- state ---
+        self._aspect   = figsize[1] / figsize[0]  # height / width, preserved on resize
+        self._resizing = False
         self.img           = None
-        self.figure, self.axes = plt.subplots(ncols=1, figsize=figsize, num='dat', dpi=150)
+        with plt.ioff():
+            self.figure, self.axes = plt.subplots(ncols=1, figsize=figsize, num='dat', dpi=150)
         self.figure.canvas.header_visible  = False
+        self.figure.canvas.resizable       = True
+        self.figure.canvas.layout.width    = '100%'
+        self.figure.canvas.mpl_connect('draw_event', self._on_figure_draw)
         self.axes2         = None
         self.cb            = None
         self.wfAxes        = None
         self.sxmBrowser    = sxmBrowser
         self.fontsize      = fontsize
         self.titlesize     = titlesize
+        self.colorMap      = cmap
         self.spec_x        = [np.linspace(-2, 2, 64)]
         self.spec_data     = [np.zeros(64)]
         self.spec_info     = [{'x_unit': 'N', 'y_unit': 'a.u.', 'x_label': 'Index'}]
@@ -109,10 +116,6 @@ class spectrumBrowser(BaseBrowser):
             self.referenceLocBtn.disabled = True
 
         self.display()
-        with plt.ioff():
-            with self.figure_display:
-                self.figure_display.clear_output(wait=True)
-                plt.show(self.figure)
 
     # ------------------------------------------------------------------
     # Widget construction
@@ -176,8 +179,6 @@ class spectrumBrowser(BaseBrowser):
                                                     icon='neuter', tooltip='Subtract local baseline')
         self.referenceLocBtn = Btn_Widget('', layout=L(30), icon='map-marker',
                                           tooltip='Plot tip location on image browser')
-        self.plot2DBtn       = Btn_Widget('', layout=L(30), icon='area-chart',
-                                          tooltip='Convert 1D plot to 2D waterfall')
         self.saveBtn         = Btn_Widget('', layout=L(30), icon='file-image-o',
                                           tooltip='Save figure to browser_outputs/')
         self.copyBtn         = Btn_Widget('', layout=L(30), icon='clipboard',
@@ -185,7 +186,6 @@ class spectrumBrowser(BaseBrowser):
         self.csvBtn          = Btn_Widget('', layout=L(30), icon='list-ul',
                                           tooltip='Save data to browser_outputs/ as .csv')
         self.generateWaterFallBtn = Btn_Widget('Waterfall', disabled=True)
-        self.figure_display  = widgets.Output(layout=FLB(99))
         self.legendBtn       = widgets.ToggleButton(description='', value=True, layout=L(30),
                                                     icon='tags', tooltip='Toggle legend')
 
@@ -197,7 +197,7 @@ class spectrumBrowser(BaseBrowser):
 
         # colormap / marker
         self.cmapSelection   = widgets.Dropdown(description='colormap:', options=plt.colormaps(),
-                                                value='Greys_r', layout=FL(98),
+                                                value=self.colorMap, layout=FL(98),
                                                 style={'description_width': '80px'})
         self.markerSelection = widgets.Dropdown(description='marker:',
                                                 options=['N', 'o', '*', 's', '^', 'X'],
@@ -248,37 +248,37 @@ class spectrumBrowser(BaseBrowser):
         self.legendUpdate = widgets.Button(description='Update', layout=FLB(48), disabled=False)
 
         # filter settings
-        self.offsetToggle    = widgets.ToggleButton(value=False, description='Offset', layout=FLB(98))
-        self.offsetSize      = widgets.FloatText(value=0.1e-12, description='amount:',
+        self.offsetToggle    = widgets.ToggleButton(value=False, description='Offset', layout=FLB(50))
+        self.offsetSize      = widgets.FloatText(value=0.1e-12, description='amt:',
                                                   step=.1e-12, readout_format='.1e',
-                                                  layout=FL(98), style={'description_width': '50px'})
-        self.svgToggle  = widgets.ToggleButton(value=False, description='Savitsky-Golay', layout=FLB(98))
-        self.svgSize    = widgets.BoundedIntText(description='window:', value=3, min=3, max=101, step=2,
-                                                  layout=FL(98), style={'description_width': '50px'})
-        self.svgOrder   = widgets.BoundedIntText(description='order:', value=1, min=1, max=5, step=1,
-                                                  layout=FL(98), style={'description_width': '50px'})
+                                                  layout=FL(48), style={'description_width': '28px'})
+        self.svgToggle  = widgets.ToggleButton(value=False, description='Savitsky-Golay', layout=FLB(44))
+        self.svgSize    = widgets.BoundedIntText(description='w:', value=3, min=3, max=101, step=2,
+                                                  layout=FL(28), style={'description_width': '18px'})
+        self.svgOrder   = widgets.BoundedIntText(description='o:', value=1, min=1, max=5, step=1,
+                                                  layout=FL(26), style={'description_width': '18px'})
         self.medFiltBtn  = widgets.ToggleButton(description='Median', value=False, layout=FLB(74))
         self.medFiltSize = widgets.BoundedIntText(description='', value=3, min=3, max=21, step=2,
                                                    layout=FLB(24))
-        self.despikeBtn       = widgets.ToggleButton(description='Despike', value=False, layout=FLB(74),
+        self.despikeBtn       = widgets.ToggleButton(description='Despike', value=False, layout=FLB(44),
                                                       tooltip='Modified Z-score spike removal')
-        self.despikeWindow    = widgets.BoundedIntText(description='win:', value=10, min=2, max=100,
-                                                        step=1, layout=FL(49),
-                                                        style={'description_width': '30px'})
-        self.despikeThreshold = widgets.FloatText(description='thr:', value=3.0, step=0.5,
-                                                   layout=FL(49),
-                                                   style={'description_width': '30px'})
+        self.despikeWindow    = widgets.BoundedIntText(description='w:', value=10, min=2, max=100,
+                                                        step=1, layout=FL(28),
+                                                        style={'description_width': '18px'})
+        self.despikeThreshold = widgets.FloatText(description='t:', value=3.0, step=0.5,
+                                                   layout=FL(26),
+                                                   style={'description_width': '14px'})
         self.movAvgBtn  = widgets.ToggleButton(description='Mov. Avg', value=False, layout=FLB(74),
                                                 tooltip='Boxcar moving average')
         self.movAvgSize = widgets.BoundedIntText(description='', value=5, min=1, max=101, step=2,
                                                   layout=FLB(24))
-        self.thresholdToggle = widgets.ToggleButton(value=False, description='Threshold', layout=FLB(98))
-        self.thresholdValue  = widgets.FloatText(value=100, description='value:',
-                                                  layout=FL(98), style={'description_width': '50px'})
-        self.averageToggle   = widgets.ToggleButton(value=False, description='Average', layout=FLB(98))
-        self.groupSize       = widgets.BoundedIntText(description='Group:', value=3, min=3, max=20,
-                                                       step=1, layout=FL(98),
-                                                       style={'description_width': '50px'})
+        self.thresholdToggle = widgets.ToggleButton(value=False, description='Threshold', layout=FLB(50))
+        self.thresholdValue  = widgets.FloatText(value=100, description='val:',
+                                                  layout=FL(48), style={'description_width': '28px'})
+        self.averageToggle   = widgets.ToggleButton(value=False, description='Average', layout=FLB(50))
+        self.groupSize       = widgets.BoundedIntText(description='grp:', value=3, min=3, max=20,
+                                                       step=1, layout=FL(48),
+                                                       style={'description_width': '28px'})
 
         # STML mode settings
         self.stmlToggle           = widgets.ToggleButton(value=False, description='STML Mode', layout=FLB(98))
@@ -306,6 +306,35 @@ class spectrumBrowser(BaseBrowser):
         self.yLimitLock = widgets.ToggleButton(value=False, description='', icon='lock',
                                                 layout=FLB(24))
 
+        # 2D plot settings
+        _p_opts = ['Index', 'Position (nm)', 'Z (m)', 'Current [A]', 'Bias [V]',
+                   'Exposure Time [ms]', 'Center Wavelength [nm]', 'Selected Grating']
+        self.plot2DToggle   = widgets.ToggleButton(value=False, description='2D View',
+                                                    layout=FLB(98))
+        self.plot2DYParam   = widgets.Dropdown(options=_p_opts, value='Index',
+                                                description='param:', layout=FL(98),
+                                                style={'description_width': '44px'})
+        self.plot2DYLabel   = widgets.Text(description='Y lbl:', value='', placeholder='auto',
+                                            layout=FL(98), style={'description_width': '44px'})
+        self.plot2DYMin     = widgets.FloatText(description='min:', value=0,
+                                                 layout=FL(48), style={'description_width': '28px'})
+        self.plot2DYMax     = widgets.FloatText(description='max:', value=0,
+                                                 layout=FL(48), style={'description_width': '28px'})
+        self.plot2DXLabel   = widgets.Text(description='X lbl:', value='', placeholder='auto',
+                                            layout=FL(98), style={'description_width': '44px'})
+        self.plot2DXMin     = widgets.FloatText(description='min:', value=0,
+                                                 layout=FL(48), style={'description_width': '28px'})
+        self.plot2DXMax     = widgets.FloatText(description='max:', value=0,
+                                                 layout=FL(48), style={'description_width': '28px'})
+        self.plot2DUpdateBtn = widgets.Button(description='Update 2D', layout=FL(98))
+        self.plot2DClimMode  = widgets.ToggleButtons(
+            options=['Visible', 'Full', 'Custom'], value='Visible',
+            description='', layout=FL(98), style={'button_width': 'auto'})
+        self.plot2DVMin = widgets.FloatText(description='min:', value=0, disabled=True,
+                                             layout=FL(48), style={'description_width': '28px'})
+        self.plot2DVMax = widgets.FloatText(description='max:', value=0, disabled=True,
+                                             layout=FL(48), style={'description_width': '28px'})
+
     def _build_layout(self) -> None:
         """Assemble widgets into HBox/VBox/Accordion containers."""
         FL  = lambda w: widgets.Layout(display='flex', width=f'{w}%')
@@ -319,7 +348,7 @@ class spectrumBrowser(BaseBrowser):
             widgets.Label('Filter', layout=FL(50)),
             self.filterSelection, self.h_new_filter_layout])
         self.h_process_layout = HBox(children=[
-            self.flattenBtn, self.fixZeroBtn, self.referenceLocBtn, self.plot2DBtn],
+            self.flattenBtn, self.fixZeroBtn, self.referenceLocBtn],
             layout=FL(98))
         self.h_selection_btn_layout = HBox(children=[
             self.refreshBtn, self.csvBtn, self.saveBtn, self.copyBtn, self.settingsBtn],
@@ -351,20 +380,33 @@ class spectrumBrowser(BaseBrowser):
                 self.feedbackToggle, self.locationToggle, self.depthSelection,
                 self.dateToggle], layout=FLH(98)),
             VBox(children=[
-                self.offsetToggle, self.offsetSize,
-                self.svgToggle, self.svgSize, self.svgOrder,
-                HBox(children=[self.medFiltBtn, self.medFiltSize], layout=FL(98)),
-                HBox(children=[self.despikeBtn,
-                               HBox(children=[self.despikeWindow,
-                                              self.despikeThreshold], layout=FL(26))],
-                     layout=FL(98)),
-                HBox(children=[self.movAvgBtn, self.movAvgSize], layout=FL(98)),
-                self.thresholdToggle, self.thresholdValue,
-                self.averageToggle, self.groupSize], layout=FLH(98)),
+                HBox(children=[self.offsetToggle,    self.offsetSize],                     layout=FL(98)),
+                HBox(children=[self.svgToggle,       self.svgSize,    self.svgOrder],      layout=FL(98)),
+                HBox(children=[self.medFiltBtn,      self.medFiltSize],                    layout=FL(98)),
+                HBox(children=[self.despikeBtn,      self.despikeWindow,
+                               self.despikeThreshold],                                     layout=FL(98)),
+                HBox(children=[self.movAvgBtn,       self.movAvgSize],                     layout=FL(98)),
+                HBox(children=[self.thresholdToggle, self.thresholdValue],                 layout=FL(98)),
+                HBox(children=[self.averageToggle,   self.groupSize],                      layout=FL(98)),
+            ], layout=FLH(98)),
             VBox(children=[
                 self.stmlToggle, self.normalizeTimeBtn, self.normalizeCurrentBtn,
                 self.normalizeEnergyBtn, self.normalizePlasmonBtn,
                 self.plasmonReference], layout=FLH(98)),
+            VBox(children=[
+                self.plot2DToggle,
+                widgets.Label('── Y axis ──', layout=FL(98)),
+                self.plot2DYParam,
+                self.plot2DYLabel,
+                HBox(children=[self.plot2DYMin, self.plot2DYMax], layout=FL(98)),
+                widgets.Label('── X axis ──', layout=FL(98)),
+                self.plot2DXLabel,
+                HBox(children=[self.plot2DXMin, self.plot2DXMax], layout=FL(98)),
+                widgets.Label('── Color scale ──', layout=FL(98)),
+                self.plot2DClimMode,
+                HBox(children=[self.plot2DVMin, self.plot2DVMax], layout=FL(98)),
+                self.plot2DUpdateBtn,
+            ], layout=FLH(98)),
             VBox(children=[
                 self.xLimitsMin, self.xLimitsMax,
                 HBox(children=[self.xLimitsBtn, self.xLimitLock], layout=FL(98)),
@@ -373,10 +415,10 @@ class spectrumBrowser(BaseBrowser):
                 layout=FLH(98)),
         ], layout=FLH(20),
         titles=['Legend Settings', 'Title Settings', 'Filter Settings',
-                'STML Mode', 'Axes Controls'])
+                'STML Mode', '2D Plot', 'Axes Controls'])
 
         self.v_image_layout = VBox(children=[
-            self.figure_display, self.h_user_layout], layout=FLB(60))
+            self.figure.canvas, self.h_user_layout], layout=FL(60))
         self.h_main_layout = VBox(children=[
             HBox(children=[
                 widgets.Label('Session', layout=widgets.Layout(
@@ -397,9 +439,13 @@ class spectrumBrowser(BaseBrowser):
                     ch.observe(self.handler_settingsChange, names='value')
             child.observe(self.handler_settingsChange, names='value')
 
-        for btn in (self.medFiltBtn, self.medFiltSize, self.despikeBtn,
-                    self.despikeWindow, self.despikeThreshold,
-                    self.movAvgBtn, self.movAvgSize):
+        for btn in (self.offsetToggle, self.offsetSize,
+                    self.svgToggle, self.svgSize, self.svgOrder,
+                    self.medFiltBtn, self.medFiltSize,
+                    self.despikeBtn, self.despikeWindow, self.despikeThreshold,
+                    self.movAvgBtn, self.movAvgSize,
+                    self.thresholdToggle, self.thresholdValue,
+                    self.averageToggle):
             btn.observe(self.redraw_image, names='value')
 
         self.groupSize.observe(self.update_legend_settings, names='value')
@@ -424,7 +470,12 @@ class spectrumBrowser(BaseBrowser):
             btn.observe(self.redraw_image, names='value')
 
         self.referenceLocBtn.on_click(self.plotSpectrumLocations)
-        self.plot2DBtn.on_click(self.plot2D)
+        self.plot2DUpdateBtn.on_click(self._redraw)
+        self.plot2DClimMode.observe(self._update_clim_widget_state, names='value')
+        for widget in (self.plot2DYMin, self.plot2DYMax,
+                       self.plot2DXMin, self.plot2DXMax,
+                       self.plot2DVMin, self.plot2DVMax):
+            widget.observe(self._redraw, names='value')
 
         self.rootFolder.observe(self.handler_root_folder_update, names='value')
         self.directorySelection.observe(self.handler_folder_selection, names=['value'])
@@ -451,10 +502,28 @@ class spectrumBrowser(BaseBrowser):
         display.clear_output(wait=True)
         display.display(self.h_main_layout)
 
+    def _on_figure_draw(self, event) -> None:
+        """Maintain original aspect ratio on every ipympl draw (fires after resize too)."""
+        if self._resizing:
+            return
+        w_in, h_in = self.figure.get_size_inches()
+        w = round(w_in * self.figure.dpi)
+        if w <= 0:
+            return
+        h_target = round(w * self._aspect)
+        if abs(round(h_in * self.figure.dpi) - h_target) > 2:
+            self._resizing = True
+            try:
+                self.figure.set_size_inches(w_in, h_target / self.figure.dpi)
+            finally:
+                self._resizing = False
+
     def _redraw(self, *_) -> None:
         """Update axes and refresh the canvas."""
-        self.update_axes()
-        self.figure_display.clear_output(wait=True)
+        if self.plot2DToggle.value:
+            self._render_2d()
+        else:
+            self.update_axes()
         self.figure.canvas.draw()
 
     # ------------------------------------------------------------------
@@ -880,35 +949,119 @@ class spectrumBrowser(BaseBrowser):
             k += 1
         self.sxmBrowser.figure.canvas.draw()
 
-    def plot2D(self, a) -> None:
-        if not self.spec:
+    def _compute_clim(self, z, x_ref, y_vals) -> tuple:
+        """Return (vmin, vmax) for the pcolormesh based on the current scale mode."""
+        mode = self.plot2DClimMode.value
+        if mode == 'Custom':
+            vmin, vmax = self.plot2DVMin.value, self.plot2DVMax.value
+            return (vmin, vmax) if vmin != vmax else (np.nanmin(z), np.nanmax(z))
+        if mode == 'Full':
+            return np.nanmin(z), np.nanmax(z)
+        # Visible: restrict to data within the current axis range inputs
+        xlo, xhi = self.plot2DXMin.value, self.plot2DXMax.value
+        ylo, yhi = self.plot2DYMin.value, self.plot2DYMax.value
+        xm = ((x_ref >= xlo) & (x_ref <= xhi)) if xlo != xhi else np.ones(len(x_ref), bool)
+        ym = ((y_vals >= ylo) & (y_vals <= yhi)) if ylo != yhi else np.ones(len(y_vals), bool)
+        z_vis = z[np.ix_(ym, xm)]
+        return (np.nanmin(z_vis), np.nanmax(z_vis)) if z_vis.size else (np.nanmin(z), np.nanmax(z))
+
+    def _update_clim_widget_state(self, *_) -> None:
+        """Enable custom clim fields only when Custom mode is active."""
+        is_custom = self.plot2DClimMode.value == 'Custom'
+        self.plot2DVMin.disabled = not is_custom
+        self.plot2DVMax.disabled = not is_custom
+
+    def _render_2d(self) -> None:
+        """Render filtered spectra as a 2D pcolormesh."""
+        if not self.spec or self.loaded_experiments is None:
             return
-        dataPoints = max(len(sd) for sd in self.spec_data)
-        xData      = self.spec_x[[len(sd) for sd in self.spec_data].index(dataPoints)]
-        directory  = self.directories[self.directorySelection.index]
-        if directory != self.active_dir:
-            directory = os.path.join(self.active_dir, directory)
-        files    = [(self.spec_data[i], os.path.getmtime(os.path.join(directory, f)))
-                    for i, f in enumerate(self.selectionList.value)]
-        data     = [d[0] for d in sorted(files, key=lambda x: x[1])]
-        direction = np.sign(xData[0] - xData[-1])
-        dataArray = np.zeros((len(self.spec), dataPoints))
-        for i, sd in enumerate(data):
-            dataArray[i, :len(sd)] = np.flip(sd) if direction == 1 else sd
-        self.axes.clear()
-        img = self.axes.imshow(dataArray, aspect='auto', origin='lower',
-                               extent=[np.min(xData), np.max(xData), 0, len(data)],
-                               cmap=self.cmapSelection.value, interpolation='none')
-        self.axes.set_ylabel('Spec Number')
-        self.axes.set_xlabel(f'{self.spec_info[0]["x_label"]} ({self.spec_info[0]["x_unit"]})')
-        if not self.cb:
-            divider = make_axes_locatable(self.axes)
-            cax = divider.append_axes('right', size='5%', pad=0.05)
-            self.cb = self.figure.colorbar(img, cax=cax)
+        ax = self.axes
+        if self.cb:
+            self.cb.remove()
+            self.cb = None
+        if self.axes2 is not None:
+            self.axes2.remove()
+            self.axes2 = None
+        ax.clear()
+
+        x_values, y_values = self._apply_filters(self.spec_x, self.spec_data)
+        n_spec = len(y_values)
+
+        # Unified x grid: use the longest x array as reference
+        n_x   = max(len(x) for x in x_values)
+        x_ref = x_values[[len(x) for x in x_values].index(n_x)]
+
+        # Stack spectra into (n_spec, n_x), interpolating shorter arrays
+        z = np.zeros((n_spec, n_x))
+        for i, (xi, yi) in enumerate(zip(x_values, y_values)):
+            z[i] = yi if len(yi) == n_x else np.interp(x_ref, xi, yi)
+
+        # Y axis values from header parameter or sequential index
+        y_param = self.plot2DYParam.value
+        averaged = (self.averageToggle.value
+                    and len(self.spec_data) % self.groupSize.value == 0)
+        step = self.groupSize.value if averaged else 1
+        if y_param == 'Index':
+            y_vals  = np.arange(n_spec, dtype=float)
+            y_label = 'Spectrum Index'
+        elif y_param == 'Position (nm)':
+            if self.sxmBrowser is not None and self.sxmBrowser.img is not None:
+                pos = []
+                for sp in self.spec[::step]:
+                    try:
+                        rx, ry = relative_position(self.sxmBrowser.img, sp)
+                        pos.append((rx, ry))
+                    except Exception:
+                        pos.append((np.nan, np.nan))
+                pos = np.array(pos[:n_spec])
+                x0, y0 = pos[0]
+                y_vals = np.sqrt((pos[:, 0] - x0) ** 2 + (pos[:, 1] - y0) ** 2)
+            else:
+                y_vals = np.arange(n_spec, dtype=float)
+            y_label = 'Position (nm)'
         else:
-            self.cb.update_normal(img)
-        self.cb.set_label(f'{self.channelYSelect.value[0]} ({self.spec_info[0]["y_unit"]})',
-                          fontsize=self.fontsize)
+            raw = []
+            for sp in self.spec[::step]:
+                try:
+                    raw.append(float(sp.header[y_param]))
+                except (KeyError, ValueError, TypeError):
+                    raw.append(np.nan)
+            y_arr = np.array(raw[:n_spec])
+            if 'Z' in y_param:
+                y_vals, y_label = y_arr * 1e9, 'Z (nm)'
+            elif 'Current' in y_param:
+                y_vals, y_label = y_arr * 1e12, 'Current (pA)'
+            elif 'Exposure' in y_param:
+                y_vals, y_label = y_arr / 1000, 'Exposure Time (s)'
+            else:
+                y_vals, y_label = y_arr, y_param
+
+        vmin, vmax = self._compute_clim(z, x_ref, y_vals)
+        mesh = ax.pcolormesh(x_ref, y_vals, z,
+                             cmap=self.cmapSelection.value, shading='auto',
+                             vmin=vmin, vmax=vmax)
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes('right', size='5%', pad=0.05)
+        self.cb = self.figure.colorbar(mesh, cax=cax)
+        self.cb.set_label(
+            f'{self.channelYSelect.value[0]} ({self.spec_info[0]["y_unit"]})',
+            fontsize=self.fontsize)
+
+        x_auto = f'{self.spec_info[0]["x_label"]} ({self.spec_info[0]["x_unit"]})'
+        ax.set_xlabel(self.plot2DXLabel.value or x_auto, fontsize=self.fontsize)
+        ax.set_ylabel(self.plot2DYLabel.value or y_label, fontsize=self.fontsize)
+
+        xlo, xhi = self.plot2DXMin.value, self.plot2DXMax.value
+        ylo, yhi = self.plot2DYMin.value, self.plot2DYMax.value
+        if xlo != xhi:
+            ax.set_xlim(xlo, xhi)
+        if ylo != yhi:
+            ax.set_ylim(ylo, yhi)
+
+        ax.set_title(self.spec_label, fontsize=self.titlesize, loc='left')
+        ax.xaxis.set_minor_locator(AutoMinorLocator(2))
+        ax.yaxis.set_minor_locator(AutoMinorLocator(2))
+        ax.tick_params(axis='both', which='both', direction='in')
 
     # ------------------------------------------------------------------
     # Navigation
@@ -1081,7 +1234,7 @@ class spectrumBrowser(BaseBrowser):
 
     def handler_update_axes(self, a) -> None:
         self.update_scan_info()
-        self.update_axes()
+        self._redraw()
 
     def handler_update_axes_limits(self, a) -> None:
         if a == self.xLimitsBtn:
