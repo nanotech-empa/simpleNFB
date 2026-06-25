@@ -2,20 +2,20 @@
 DAT_browser.py
 --------------
 spectrumBrowser widget for Nanonis DAT spectroscopy data in Jupyter notebooks.
+Uses plotly FigureWidget for rendering (replaces matplotlib).
 '''
 
 import bisect
 import os
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import ipywidgets as widgets
-import matplotlib as mpl
-import matplotlib.pyplot as plt
 import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
 from IPython import display
-from matplotlib.ticker import AutoMinorLocator
-from mpl_toolkits.axes_grid1 import make_axes_locatable
 from scipy.interpolate import interp1d
 from scipy.signal import medfilt, savgol_filter
 
@@ -25,14 +25,21 @@ from .process_utils import (rebin_intensity_nm_to_ev, smooth_data, group_average
                              relative_position, despike_z_score, moving_average)
 from .widget_helpers import HBox, VBox, Btn_Widget, Text_Widget, Selection_Widget
 
+# All available colormap names from plotly qualitative and sequential modules
+_QUAL_CMAPS = sorted(n for n in dir(px.colors.qualitative)
+                     if not n.startswith('_') and isinstance(getattr(px.colors.qualitative, n), list))
+_SEQ_CMAPS  = sorted(n for n in dir(px.colors.sequential)
+                     if not n.startswith('_') and isinstance(getattr(px.colors.sequential, n), list))
+_ALL_CMAPS  = _QUAL_CMAPS + _SEQ_CMAPS
+
+
 
 class fileBrowser(BaseBrowser):
     '''
     Interactive browser for Nanonis DAT spectroscopy data.
 
     Public attributes:
-        figure    – matplotlib Figure
-        axes      – matplotlib Axes
+        figure    – plotly FigureWidget
         spec      – list of Spm objects for loaded files
         spec_data – list of ndarrays (raw / processed y-data)
         spec_x    – list of ndarrays (x-data per spectrum)
@@ -52,36 +59,31 @@ class fileBrowser(BaseBrowser):
         'History Data':       '_info_history',
     }
 
-    def __init__(self, figsize=(3.5, 2.8), fontsize: int = 8, titlesize: int = 5,
-                 cmap: str = 'Greys_r', home_directory: str = './',
-                 sxmBrowser=None) -> None:
-        # --- matplotlib defaults ---
-        mpl.rcParams['figure.dpi']          = 100
-        mpl.rcParams['axes.linewidth']      = 0.8
-        mpl.rcParams['font.family']         = ['Microsoft Sans Serif']
-        mpl.rcParams['font.size']           = 8
-        mpl.rcParams['axes.labelpad']       = 3
-        mpl.rcParams['xtick.labelsize']     = 7
-        mpl.rcParams['ytick.labelsize']     = 7
-        mpl.rcParams['axes.labelsize']      = 7
+    # Mapping from legacy Dropdown option labels to plotly marker symbols
+    _MARKER_MAP: dict = {
+        'N': None, 'circle': 'circle', 'star': 'star',
+        'square': 'square', 'triangle-up': 'triangle-up', 'x': 'x',
+    }
 
+    def __init__(self, figsize=(3.5, 2.8), fontsize: int = 8, titlesize: int = 5,
+                 cmap: str = 'greys', home_directory: str = './',
+                 sxmBrowser=None) -> None:
         # --- state ---
-        self._aspect   = figsize[1] / figsize[0]  # height / width, preserved on resize
-        self._resizing = False
         self.img           = None
-        with plt.ioff():
-            self.figure, self.axes = plt.subplots(ncols=1, figsize=figsize, num='dat', dpi=150)
-        self.figure.canvas.header_visible  = False
-        self.figure.canvas.resizable       = True
-        self.figure.canvas.layout.width    = '100%'
-        self.figure.canvas.mpl_connect('draw_event', self._on_figure_draw)
-        self.axes2         = None
-        self.cb            = None
-        self.wfAxes        = None
+        self.figure        = go.FigureWidget()
+        self.figure.update_layout(
+            margin=dict(l=60, r=30, t=60, b=50),
+            autosize=True, height=350,
+            paper_bgcolor="rgb(0,0,0,0)",
+        )
+        self._apply_font_defaults()
+        self._setup_figure_autosize()
+        self.wfAxes        = None          # external axes hook (optional waterfall)
         self.sxmBrowser    = sxmBrowser
         self.fontsize      = fontsize
         self.titlesize     = titlesize
-        self.colorMap      = cmap
+        cmap_lower = cmap.lower()
+        self.colorMap = next((n for n in _ALL_CMAPS if n.lower() == cmap_lower), 'Greys')
         self.spec_x        = [np.linspace(-2, 2, 64)]
         self.spec_data     = [np.zeros(64)]
         self.spec_info     = [{'x_unit': 'N', 'y_unit': 'a.u.', 'x_label': 'Index'}]
@@ -105,7 +107,9 @@ class fileBrowser(BaseBrowser):
         self.directories   = [self.active_dir]
         self._scan_cache: dict = {}
 
-        self.axes.plot(self.spec_x[0], self.spec_data[0])
+        # Initial placeholder trace
+        self.figure.add_trace(go.Scatter(
+            x=self.spec_x[0], y=self.spec_data[0], mode='lines'))
 
         self._build_widgets()
         self._build_layout()
@@ -123,23 +127,12 @@ class fileBrowser(BaseBrowser):
 
     def _build_widgets(self) -> None:
         """Instantiate all ipywidgets; no observers set here."""
-        L   = lambda w: widgets.Layout(visibility='visible', width=f'{w}px')
-        FL  = lambda w: widgets.Layout(display='flex', width=f'{w}%')
-        FLB = lambda w: widgets.Layout(display='flex', width=f'{w}%',
-                                       align_items='center', justify_content='center')
-        FLH = lambda w: widgets.Layout(visibility='hidden', display='flex', width=f'{w}%')
+        L, FL, FLB, FLH = self._layout_helpers()
+        self._build_common_file_widgets()
 
         # selections
-        self.rootFolder = widgets.Text(description='',
-                                       layout=widgets.Layout(display='flex', width='95%'))
-        self.directorySelection = widgets.Select(options=self.directories, rows=8,
-                                                 layout=FL(98))
-        self.directoryDisplayDepth = widgets.Dropdown(
-            description='depth', value=1, options=['full', 1, 2, 3, 4, 5],
-            tooltip='Depth of folder structure shown in selection menu',
-            layout=FLB(75), style={'description_width': '40px'})
         self.selectionList = widgets.SelectMultiple(
-            options=self.dat_files, value=[], description='', rows=30, layout=FL(98))
+            options=self.dat_files, value=[], description='', rows=30, layout=FL(98),continuous_update=False)
         self.filterSelection = widgets.SelectMultiple(
             options=['all', 'dIdV', 'Z-Spectroscopy', 'stml', 'History'],
             value=['all'], description='', rows=5, layout=FL(98))
@@ -158,10 +151,6 @@ class fileBrowser(BaseBrowser):
         self.refreshBtn = Btn_Widget('', icon='refresh', tooltip='Reload file list',
                                      layout=L(30))
 
-        # text
-        self.filenameText = Text_Widget('')
-        self.indexText    = Text_Widget('0')
-        self.errorText    = Selection_Widget([], 'Out:', rows=5)
         self.saveNote     = Text_Widget('', description='note',
                                         layout=FL(98), style={'description_width': '30px'})
 
@@ -195,14 +184,20 @@ class fileBrowser(BaseBrowser):
         self.offset_value  = widgets.FloatText(value=0.1e-12, description='offset:',
                                                step=.1e-12, readout_format='.1e', layout=L(120))
 
-        # colormap / marker
-        self.cmapSelection   = widgets.Dropdown(description='colormap:', options=plt.colormaps(),
-                                                value=self.colorMap, layout=FL(98),
-                                                style={'description_width': '80px'})
-        self.markerSelection = widgets.Dropdown(description='marker:',
-                                                options=['N', 'o', '*', 's', '^', 'X'],
-                                                value='o', layout=FL(98),
-                                                style={'description_width': '80px'})
+        # colormap / marker — names from px.colors.qualitative and px.colors.sequential
+        _init_seq = self.colorMap in _SEQ_CMAPS or self.colorMap not in _QUAL_CMAPS
+        self.cmapCategory = widgets.ToggleButtons(
+            options=['Discrete', 'Sequential'], value='Sequential' if _init_seq else 'Discrete',
+            description='', layout=FL(98), style={'button_width': 'auto'})
+        _init_opts = _SEQ_CMAPS if _init_seq else _QUAL_CMAPS
+        _init_val  = self.colorMap if self.colorMap in _init_opts else _init_opts[0]
+        self.cmapSelection = widgets.Dropdown(
+            description='colormap:', options=_init_opts, value=_init_val,
+            layout=FL(98), style={'description_width': '80px'})
+        self.markerSelection = widgets.Dropdown(
+            description='marker:',
+            options=['N', 'circle', 'star', 'square', 'triangle-up', 'x'],
+            value='circle', layout=FL(98), style={'description_width': '80px'})
 
         # smoothing (legacy panel kept for UI compat)
         self.smoothBtn    = widgets.ToggleButton(description='', value=False, layout=L(30),
@@ -243,7 +238,8 @@ class fileBrowser(BaseBrowser):
             value='Filename', description='Parameter:', layout=FL(98),
             style={'description_width': '80px'})
         self.legendEntry  = widgets.Text(description='', tooltip='New legend text',
-                                          layout=FL(98), disabled=False)
+                                          layout=FL(98), disabled=False,
+                                          continuous_update=False)
         self.legendToggle = widgets.ToggleButton(value=True, description='legend', layout=FLB(48))
         self.legendUpdate = widgets.Button(description='Update', layout=FLB(48), disabled=False)
 
@@ -334,13 +330,11 @@ class fileBrowser(BaseBrowser):
                                              layout=FL(48), style={'description_width': '28px'})
         self.plot2DVMax = widgets.FloatText(description='max:', value=0, disabled=True,
                                              layout=FL(48), style={'description_width': '28px'})
+        self._build_font_widgets()
 
     def _build_layout(self) -> None:
         """Assemble widgets into HBox/VBox/Accordion containers."""
-        FL  = lambda w: widgets.Layout(display='flex', width=f'{w}%')
-        FLB = lambda w: widgets.Layout(display='flex', width=f'{w}%',
-                                       align_items='center', justify_content='center')
-        FLH = lambda w: widgets.Layout(visibility='hidden', display='flex', width=f'{w}%')
+        _, FL, FLB, FLH = self._layout_helpers()
 
         self.h_new_filter_layout = HBox(children=[
             widgets.Label('New', layout=FLB(24)), self.newFilterText, self.addFilterBtn])
@@ -365,7 +359,7 @@ class fileBrowser(BaseBrowser):
             layout=FL(20))
         self.v_btn_layout = VBox(children=[
             self.h_selection_btn_layout, self.h_process_layout,
-            self.cmapSelection, self.markerSelection], layout=FL(48))
+            self.cmapCategory, self.cmapSelection, self.markerSelection], layout=FL(48))
         self.h_user_layout = HBox(children=[
             self.v_channel_layout, self.v_btn_layout], layout=FLB(98))
         self.v_settings_layout = widgets.Accordion(children=[
@@ -413,47 +407,52 @@ class fileBrowser(BaseBrowser):
                 self.yLimitsMin, self.yLimitsMax,
                 HBox(children=[self.yLimitsBtn, self.yLimitLock], layout=FL(98))],
                 layout=FLH(98)),
+            self._font_settings_tab(),
         ], layout=FLH(20),
         titles=['Legend Settings', 'Title Settings', 'Filter Settings',
-                'STML Mode', '2D Plot', 'Axes Controls'])
+                'STML Mode', '2D Plot', 'Axes Controls', 'Font Settings'])
 
+        # FigureWidget is itself a widget — use self.figure directly (no .canvas wrapper)
         self.v_image_layout = VBox(children=[
-            self.figure.canvas, self.h_user_layout], layout=FL(60))
-        self.h_main_layout = VBox(children=[
-            HBox(children=[
-                widgets.Label('Session', layout=widgets.Layout(
-                    display='flex', justify_content='flex-start', width='5%')),
-                self.rootFolder], layout=FL(99)),
-            HBox(children=[
-                self.v_file_select_layout, self.v_image_layout,
-                self.v_settings_layout], layout=FL(99))],
-            layout=FL(100))
-        self.v_settings_layout.layout.min_width  = '200px'
-        self.v_file_select_layout.layout.min_width = '200px'
+            self.figure, self.h_user_layout], layout=FL(60))
+        self._build_main_layout(self.v_file_select_layout, self.v_image_layout, 5)
 
     def _connect_observers(self) -> None:
         """Wire all observe() and on_click() callbacks."""
-        for child in self.v_settings_layout.children[:-1]:  # exclude axes controls
-            if type(child) == type(self.v_btn_layout):
-                for ch in child.children:
-                    ch.observe(self.handler_settingsChange, names='value')
-            child.observe(self.handler_settingsChange, names='value')
+        # Display-only — patch existing traces in-place; no trace rebuild
+        for w in (self.legendToggle, self.cmapSelection, self.parameterLegendList):
+            w.observe(self._update_display, names='value')
+        # legendBtn.value is never read by any render path — no observer needed
 
-        for btn in (self.offsetToggle, self.offsetSize,
-                    self.svgToggle, self.svgSize, self.svgOrder,
-                    self.medFiltBtn, self.medFiltSize,
-                    self.despikeBtn, self.despikeWindow, self.despikeThreshold,
-                    self.movAvgBtn, self.movAvgSize,
-                    self.thresholdToggle, self.thresholdValue,
-                    self.averageToggle):
-            btn.observe(self.redraw_image, names='value')
+        # Tier 1 — filter/transform pipeline; full trace rebuild required
+        for w in (self.plot2DToggle, self.plot2DYParam,
+                  self.plot2DYLabel, self.plot2DXLabel,
+                  self.offsetToggle, self.offsetSize,
+                  self.medFiltBtn, self.medFiltSize,
+                  self.despikeBtn, self.despikeWindow, self.despikeThreshold,
+                  self.movAvgBtn, self.movAvgSize,
+                  self.thresholdToggle, self.thresholdValue,
+                  self.averageToggle, self.flattenBtn, self.fixZeroBtn):
+            w.observe(self._redraw, names='value')
 
+        # Tier 2 — rebuild title text then redraw (no channel reload)
+        for w in (self.titleToggle, self.nameToggle, self.setpointToggle,
+                  self.feedbackToggle, self.locationToggle, self.depthSelection,
+                  self.dateToggle, self.svgToggle, self.svgSize, self.svgOrder):
+            w.observe(self._refresh_info, names='value')
+
+        # Tier 3 — full pipeline (channel data reload or STML normalization)
+        for w in (self.stmlToggle,
+                  self.normalizeTimeBtn, self.normalizeCurrentBtn,
+                  self.normalizeEnergyBtn, self.normalizePlasmonBtn):
+            w.observe(self.redraw_image, names='value')
+
+        # legend group
         self.groupSize.observe(self.update_legend_settings, names='value')
         self.averageToggle.observe(self.update_legend_settings, names='value')
         self.groupSize.observe(self.update_legend_mode, names='value')
         self.defaultLegendToggle.observe(self.update_legend_mode, names='value')
         self.customLegendToggle.observe(self.update_legend_mode, names='value')
-        self.legendToggle.observe(self.handler_settingsChange, names='value')
         self.legendUpdate.on_click(self.update_legend_entry)
 
         self.settingsBtn.observe(self.handler_settingsDisplay, names='value')
@@ -466,16 +465,22 @@ class fileBrowser(BaseBrowser):
         self.generateWaterFallBtn.on_click(self.generateWaterFall)
         self.refreshBtn.on_click(self.handler_root_folder_update)
 
-        for btn in (self.flattenBtn, self.legendBtn, self.fixZeroBtn):
-            btn.observe(self.redraw_image, names='value')
-
         self.referenceLocBtn.on_click(self.plotSpectrumLocations)
         self.plot2DUpdateBtn.on_click(self._redraw)
         self.plot2DClimMode.observe(self._update_clim_widget_state, names='value')
-        for widget in (self.plot2DYMin, self.plot2DYMax,
-                       self.plot2DXMin, self.plot2DXMax,
-                       self.plot2DVMin, self.plot2DVMax):
-            widget.observe(self._redraw, names='value')
+        for w in (self.plot2DYMin, self.plot2DYMax,
+                  self.plot2DXMin, self.plot2DXMax,
+                  self.plot2DVMin, self.plot2DVMax):
+            w.observe(self._redraw, names='value')
+
+        # legacy smoothing widgets (not in layout; tier-2 for compat)
+        for w in (self.smoothBtn, self.windowParam, self.orderParam,
+                  self.offsetBtn, self.offset_value):
+            w.observe(self.handler_update_axes, names='value')
+
+        # plasmonReference: single observer only — loads file then redraws
+        self.plasmonReference.observe(self.handler_update_plasmonic_reference, names='value')
+        self.cmapCategory.observe(self._on_cmap_category_change, names='value')
 
         self.rootFolder.observe(self.handler_root_folder_update, names='value')
         self.directorySelection.observe(self.handler_folder_selection, names=['value'])
@@ -486,12 +491,7 @@ class fileBrowser(BaseBrowser):
         self.channelXSelect.observe(self.handler_channel_selection, names='value')
         self.channelYSelect.observe(self.handler_channel_selection, names=['value'])
 
-        for widget in (self.smoothBtn, self.windowParam, self.orderParam,
-                       self.offsetBtn, self.offset_value, self.cmapSelection):
-            widget.observe(self.handler_update_axes, names='value')
-
-        self.stmlToggle.observe(self.handler_settingsChange, names='value')
-        self.plasmonReference.observe(self.handler_update_plasmonic_reference, names='value')
+        self._connect_font_observers()
 
     # ------------------------------------------------------------------
     # Display
@@ -502,49 +502,52 @@ class fileBrowser(BaseBrowser):
         display.clear_output(wait=True)
         display.display(self.h_main_layout)
 
-    def _on_figure_draw(self, event) -> None:
-        """Maintain original aspect ratio on every ipympl draw (fires after resize too)."""
-        if self._resizing:
-            return
-        w_in, h_in = self.figure.get_size_inches()
-        w = round(w_in * self.figure.dpi)
-        if w <= 0:
-            return
-        h_target = round(w * self._aspect)
-        if abs(round(h_in * self.figure.dpi) - h_target) > 2:
-            self._resizing = True
-            try:
-                self.figure.set_size_inches(w_in, h_target / self.figure.dpi)
-            finally:
-                self._resizing = False
+    def _on_cmap_category_change(self, change) -> None:
+        opts = _SEQ_CMAPS if change['new'] == 'Sequential' else _QUAL_CMAPS
+        cur  = self.cmapSelection.value
+        self.cmapSelection.options = opts
+        self.cmapSelection.value   = cur if cur in opts else opts[0]
 
     def _redraw(self, *_) -> None:
-        """Update axes and refresh the canvas."""
+        """Route to 2D or 1D rendering; FigureWidget updates reactively."""
         if self.plot2DToggle.value:
             self._render_2d()
         else:
             self.update_axes()
-        self.figure.canvas.draw()
+
+    def _update_display(self, *_) -> None:
+        """Patch legend, colors, and trace names in-place; no trace rebuild.
+
+        Called by display-only widgets (legendToggle, cmapSelection,
+        parameterLegendList). Falls back to _redraw() if no traces exist yet.
+        """
+        if self._loading:
+            return
+        if not self.figure.data or self.loaded_experiments is None:
+            self._redraw()
+            return
+        colorscale = self._resolve_colorscale(self.cmapSelection.value)
+        with self.figure.batch_update():
+            if self.plot2DToggle.value:
+                # 2D: update Heatmap colorscale only
+                self.figure.data[0].colorscale = colorscale
+            else:
+                n = len(self.figure.data)
+                colors = px.colors.sample_colorscale(
+                    colorscale, np.linspace(0, 1, max(n, 2)))
+                labels = self._build_legend_labels(self.spec_x, self.spec_data)
+                for i, trace in enumerate(self.figure.data):
+                    trace.line.color = colors[i]
+                    if i < len(labels):
+                        trace.name = labels[i]
+            self.figure.layout.showlegend = self.legendToggle.value
 
     # ------------------------------------------------------------------
     # File I/O
     # ------------------------------------------------------------------
 
-    def save_figure(self, a) -> None:
-        """Save the current figure to browser_outputs/ at 500 dpi."""
-        self.saveBtn.icon = 'hourglass-start'
-        out_dir = self.active_dir / 'browser_outputs'
-        out_dir.mkdir(exist_ok=True)
-        stem = (f'{str(self.directorySelection.value).split(chr(92))[-1]}'
-                f'_{self.spec[0].name.split(".")[0]}_{self.channelYSelect.value[0]}')
-        if self.saveNote.value:
-            stem += f'_{self.saveNote.value}'
-        self.last_save_fname = str(out_dir / f'{stem}.png')
-        self.figure.savefig(self.last_save_fname, dpi=500, format='png',
-                            transparent=True, bbox_inches='tight')
-        self.updateErrorText('Figure Saved')
-        self.saveNote.value = ''
-        self.saveBtn.icon = 'file-image-o'
+    def _figure_stem(self, dir_name: str) -> str:
+        return f'{dir_name}_{self.spec[0].name.split(".")[0]}_{self.channelYSelect.value[0]}'
 
     def save_data(self, a) -> None:
         """Save current spectra to browser_outputs/ as CSV."""
@@ -581,13 +584,16 @@ class fileBrowser(BaseBrowser):
         if filename is None:
             files = [os.path.join(directory, self.dat_files[idx])
                      for idx in self.spec_index]
-            self.spec = [Spm(f) for f in files]
+            with ThreadPoolExecutor(max_workers=min(len(files), 8)) as ex:
+                self.spec = list(ex.map(Spm, files))
             self.filenameText.value = ','.join(
                 self.all_files[idx] for idx in self.spec_index)
             self.loaded_experiments = [s.header['Experiment'] for s in self.spec]
             self._scan_cache = {}
-            self._update_channel_selection()
-            self.update_image_data()
+            self._loading = True
+            self._update_channel_selection()   # channel observers suppressed
+            self._loading = False
+            self.update_image_data()           # runs exactly once
         else:
             return Spm(os.path.join(directory, filename))
 
@@ -602,37 +608,42 @@ class fileBrowser(BaseBrowser):
             self._scan_cache[cache_key] = spec.get_param(key)
         return self._scan_cache[cache_key]
 
-    def update_image_data(self, filename=None) -> None:
+    def update_image_data(self) -> None:
         """Reload channel data, apply STML normalization if active."""
         channelX = self.channelXSelect.value
         channelY = self.channelYSelect.value
-        if filename is None:
-            self.spec_data, self.spec_info, self.labels, self.spec_x = [], [], [], []
-            if len(self.selectionList.value) >= 1 and len(channelY) == 1:
-                for spec in self.spec:
-                    spec_data, yunit = spec.get_channel(channelY[0])
-                    self.spec_data.append(spec_data)
-                    if channelX == 'Index':
-                        spec_x, xunit = np.arange(len(spec_data)), 'N'
-                    else:
-                        spec_x, xunit = spec.get_channel(channelX)
-                    self.spec_info.append({'x_unit': xunit, 'y_unit': yunit, 'x_label': channelX})
-                    self.spec_x.append(spec_x)
-                    self.labels.append(spec.name)
-            if len(self.selectionList.value) == 1 and len(channelY) > 1:
-                spec = self.spec[0]
-                for ch in channelY:
-                    spec_data, yunit = spec.get_channel(ch)
-                    self.spec_data.append(spec_data)
-                    spec_x, xunit = spec.get_channel(channelX)
-                    self.spec_info.append({'x_unit': xunit, 'y_unit': yunit, 'x_label': channelX})
-                    self.spec_x.append(spec_x)
-                    self.labels.append(ch)
-            self.update_scan_info()
-        else:
-            spec = self.load_new_image(filename=filename)
-            spec.get_channel(channelY[0])
-            spec.get_channel(channelX)
+        self.spec_data, self.spec_info, self.labels, self.spec_x = [], [], [], []
+        if len(self.selectionList.value) >= 1 and len(channelY) == 1:
+            ch_y = channelY[0]
+            use_index = (channelX == 'Index')
+
+            def _read_one(spec):
+                yd, yu = spec.get_channel(ch_y)
+                xd, xu = (np.arange(len(yd)), 'N') if use_index else spec.get_channel(channelX)
+                return yd, yu, xd, xu, spec.name
+
+            with ThreadPoolExecutor(max_workers=min(len(self.spec), 8)) as ex:
+                rows = list(ex.map(_read_one, self.spec))
+            for yd, yu, xd, xu, name in rows:
+                self.spec_data.append(yd)
+                self.spec_info.append({'x_unit': xu, 'y_unit': yu, 'x_label': channelX})
+                self.spec_x.append(xd)
+                self.labels.append(name)
+        if len(self.selectionList.value) == 1 and len(channelY) > 1:
+            spec = self.spec[0]
+            # resolve X once; for 'Index' derive length from first Y channel
+            shared_x = shared_xunit = None
+            for ch in channelY:
+                spec_data, yunit = spec.get_channel(ch)
+                if shared_x is None:
+                    shared_x, shared_xunit = (
+                        (np.arange(len(spec_data)), 'N') if channelX == 'Index'
+                        else spec.get_channel(channelX))
+                self.spec_data.append(spec_data)
+                self.spec_info.append({'x_unit': shared_xunit, 'y_unit': yunit, 'x_label': channelX})
+                self.spec_x.append(shared_x)
+                self.labels.append(ch)
+        self.update_scan_info()
 
         # STML normalization
         if self.stmlToggle.value and 'stml' in (self.loaded_experiments or [''])[0].lower():
@@ -692,9 +703,9 @@ class fileBrowser(BaseBrowser):
         bias      = self._bias_tuple(self._cache_scan_param(spec, 'V_spec'))
         feedback_str = 'feedback on' if fb_enable == 'ON' else 'feedback off'
         label.append(
-            fr'Exposure Time (s): {float(spec.header["Exposure Time [ms]"])/1000:.0f}, '
-            fr'$\lambda_c$: {spec.header["Center Wavelength [nm]"]}, '
-            fr'grating: {spec.header["Selected Grating"]}')
+            f'Exposure Time (s): {float(spec.header["Exposure Time [ms]"])/1000:.0f}, '
+            f'λc: {spec.header["Center Wavelength [nm]"]}, '
+            f'grating: {spec.header["Selected Grating"]}')
         setpoint_str = 'setpoint: I = %.0f%s, V = %.1f%s' % (set_point + bias)
         return setpoint_str, feedback_str
 
@@ -736,6 +747,8 @@ class fileBrowser(BaseBrowser):
 
     def update_scan_info(self) -> None:
         """Build spec_label from metadata; dispatches per experiment type."""
+        if self.loaded_experiments is None:
+            return
         experiments = self.loaded_experiments
         if experiments.count(experiments[0]) != len(experiments):
             self.updateErrorText('Please ensure all selections are the same measurement type')
@@ -747,7 +760,7 @@ class fileBrowser(BaseBrowser):
         setpoint_str = feedback_str = ''
 
         if self.nameToggle.value:
-            label.append(f'Experiment: {experiment} $\\rightarrow$ filename: {spec.name}')
+            label.append(f'Experiment: {experiment} → filename: {spec.name}')
 
         for key, method in self._INFO_BUILDERS.items():
             if key in experiment:
@@ -756,13 +769,13 @@ class fileBrowser(BaseBrowser):
 
         # date
         if len(self.spec) > 1:
-            date_str = f'Date: {self.spec[0].header["Saved Date"]} $\\rightarrow$ {self.spec[-1].header["Saved Date"]}'
+            date_str = f'Date: {self.spec[0].header["Saved Date"]} → {self.spec[-1].header["Saved Date"]}'
         else:
             date_str = f'Date: {spec.header["Saved Date"]}'
 
         if self.setpointToggle.value and setpoint_str:
             if self.feedbackToggle.value and feedback_str:
-                setpoint_str += f' $\\rightarrow$ {feedback_str}'
+                setpoint_str += f' → {feedback_str}'
             label.append(setpoint_str)
         if self.locationToggle.value:
             location = self.directories[self.directorySelection.index]
@@ -772,10 +785,10 @@ class fileBrowser(BaseBrowser):
         if self.dateToggle.value:
             label.append(date_str)
         if self.svgToggle.value:
-            label.append(f'Savitzky-Golay Filter $\\rightarrow$ Window: {self.svgSize.value}, '
+            label.append(f'Savitzky-Golay Filter → Window: {self.svgSize.value}, '
                          f'Order: {self.svgOrder.value}')
 
-        self.spec_label = '\n'.join(label) if self.titleToggle.value else ''
+        self.spec_label = '<br>'.join(label) if self.titleToggle.value else ''
 
     # ------------------------------------------------------------------
     # Plotting
@@ -836,121 +849,118 @@ class fileBrowser(BaseBrowser):
             labels = self.labels
         return labels
 
-    def _plot_spectra(self, ax, x_values: list, y_values: list, labels: list) -> None:
-        """Plot all spectra onto ax with colormap-derived colors."""
-        colors = plt.cm.get_cmap(str(self.cmapSelection.value))(
-            np.linspace(0, 1, len(y_values)))
+    def _plot_spectra(self, x_values: list, y_values: list, labels: list) -> None:
+        """Add Scatter traces to figure with colormap-derived colours."""
+        n = max(len(y_values), 2)
+        colors = px.colors.sample_colorscale(self._resolve_colorscale(self.cmapSelection.value),
+                                              np.linspace(0, 1, n))
         for x, y, lbl, c in zip(x_values, y_values, labels, colors):
-            ax.plot(x, y, color=c, label=lbl)
+            self.figure.add_trace(go.Scatter(x=x, y=y, name=lbl, mode='lines',
+                                              line=dict(color=c)))
 
-    def _add_stml_axis(self, ax) -> None:
-        """Add secondary wavelength axis for STML mode."""
-        xmin, xmax, ymin, ymax = ax.axis()
-        if self.axes2 is not None:
-            self.axes2.remove()
-            self.axes2 = None
-        self.axes2 = ax.twiny()
-        self.axes2.set_xlabel('Wavelength (nm)', fontsize=self.fontsize)
-        self.axes2.set_xscale('function',
-                               functions=(lambda en: 1240 / (en + 1e-9),
-                                          lambda lm: 1240 / (lm + 1e-9)))
-        for x in self.spec_x:
-            energy = x[(x >= xmin) & (x <= xmax)]
-            self.axes2.plot(1240 / energy, energy, alpha=0)
-        self.axes2.xaxis.set_minor_locator(AutoMinorLocator(2))
-        self.axes2.tick_params(axis='x', which='both', direction='in')
-        self.axes2.set_zorder(ax.get_zorder() - 1)
-        self.axes2.xaxis.set_zorder(ax.xaxis.get_zorder() + 1)
-        ax.set_ylim(ymin, ymax)
+    def _add_stml_axis(self) -> None:
+        """Add secondary wavelength axis (xaxis2) for STML energy spectra."""
+        xr = self.figure.layout.xaxis.range
+        if not xr:
+            # Fall back to data range
+            all_x = np.concatenate(self.spec_x)
+            xr = [float(all_x.min()), float(all_x.max())]
+        xmin, xmax = xr
+        if xmin <= 0 or xmax <= 0:
+            return
+        # Six evenly-spaced energy ticks → relabelled as wavelength (nm)
+        e_ticks = np.linspace(xmin, xmax, 6)
+        e_ticks = e_ticks[e_ticks > 0]
+        self.figure.update_layout(xaxis2=dict(
+            title='Wavelength (nm)', overlaying='x', side='top',
+            range=[xmin, xmax],
+            tickvals=list(e_ticks),
+            ticktext=[f'{1240 / e:.0f}' for e in e_ticks],
+            ticks='inside', visible=True,
+        ))
 
     def update_axes(self) -> None:
         """Re-render all spectra with current filter/display settings."""
-        if not self.figure:
-            self.figure, self.axes = plt.subplots(ncols=1, figsize=(8, 8))
-        ax = self.axes
-        if self.cb:
-            self.cb.remove()
-            self.cb = None
-        ax.clear()
-        if self.axes2 is not None:
-            self.axes2.remove()
-            self.axes2 = None
+        # Clear previous traces and secondary axis
+        self.figure.data = ()
+        self.figure.update_layout(
+            xaxis2=dict(visible=False, overlaying='x', side='top'))
 
         x_values, y_values = self._apply_filters(self.spec_x, self.spec_data)
         labels = self._build_legend_labels(x_values, y_values)
-        self._plot_spectra(ax, x_values, y_values, labels)
+        self._plot_spectra(x_values, y_values, labels)
 
-        ax.set_title(self.spec_label, fontsize=self.titlesize, loc='left')
-        ax.set_xlabel(f'{self.spec_info[0]["x_label"]} ({self.spec_info[0]["x_unit"]})',
-                      fontsize=self.fontsize)
-        ax.set_ylabel(f'{self.channelYSelect.value[0]} ({self.spec_info[0]["y_unit"]})',
-                      fontsize=self.fontsize)
-        ax.xaxis.set_minor_locator(AutoMinorLocator(2))
-        ax.yaxis.set_minor_locator(AutoMinorLocator(2))
-        ax.tick_params(axis='y', which='both', direction='in')
-        ax.tick_params(axis='x', which='both', direction='in')
+        n = len(self.figure.data)
+        legend_fs = self.legendFontsize[bisect.bisect_left([4, 16], n)]
 
-        if self.legendToggle.value:
-            idx = bisect.bisect_left([4, 16], len(ax.lines))
-            ax.legend(draggable=True, fontsize=self.legendFontsize[idx], frameon=False)
+        x_title = f'{self.spec_info[0]["x_label"]} ({self.spec_info[0]["x_unit"]})'
+        y_title = f'{self.channelYSelect.value[0]} ({self.spec_info[0]["y_unit"]})'
 
-        if self.stmlToggle.value and 'stml' in (self.loaded_experiments or [''])[0].lower():
-            self._add_stml_axis(ax)
+        self.figure.update_layout(
+            title=dict(text=self.spec_label, font=dict(size=self.titlesize), x=0),
+            xaxis=dict(title=x_title, showgrid=False, ticks='inside',
+                       minor=dict(ticks='inside', ticklen=3)),
+            yaxis=dict(title=y_title, showgrid=False, ticks='inside',
+                       minor=dict(ticks='inside', ticklen=3)),
+            showlegend=self.legendToggle.value,
+            legend=dict(font=dict(size=legend_fs), bgcolor='rgba(0,0,0,0)'),
+        )
 
         self._sync_axis_limit_sliders()
         if self.xLimitLock.value:
-            self.axes.set_xlim(self.xLimitsMin.value, self.xLimitsMax.value)
-            if self.axes2 is not None:
-                self.axes2.set_xlim(1240 / self.xLimitsMax.value,
-                                    1240 / self.xLimitsMin.value)
+            self.figure.update_layout(
+                xaxis=dict(range=[self.xLimitsMin.value, self.xLimitsMax.value]))
         if self.yLimitLock.value:
-            self.axes.set_ylim(self.yLimitsMin.value, self.yLimitsMax.value)
+            self.figure.update_layout(
+                yaxis=dict(range=[self.yLimitsMin.value, self.yLimitsMax.value]))
 
-        self.figure.tight_layout(pad=1)
+        if self.stmlToggle.value and 'stml' in (self.loaded_experiments or [''])[0].lower():
+            self._add_stml_axis()
 
     # ------------------------------------------------------------------
     # Alternate views
     # ------------------------------------------------------------------
 
     def generateWaterFall(self, a=None) -> None:
-        if self.wfAxes is None:
-            return
-        positions = [[spec.get_param('x')[0], spec.get_param('y')[0]] for spec in self.spec]
-        x0, y0 = positions[0]
-        distances = [np.sqrt((p[0] - x0) ** 2 + (p[1] - y0) ** 2) for p in positions]
-        self.wfAxes.imshow(np.rot90(self.spec_data),
-                           extent=[distances[0], distances[-1],
-                                   self.spec_x[0].min(), self.spec_x[0].max()],
-                           aspect='auto', cmap=self.cmapSelection.value)
-        self.wfAxes.set_xlabel('distance (nm)')
-        self.wfAxes.set_ylabel('Bias (V)')
-        self.wfAxes.set_title('dI/dV')
-        self.save_figure(self.generateWaterFallBtn)
+        """Switch to 2D view with Position (nm) on the Y-axis (waterfall)."""
+        self.plot2DToggle.value = True
+        self.plot2DYParam.value = 'Position (nm)'
+        self._redraw()
 
     def plotSpectrumLocations(self, a) -> None:
+        """Overlay tip positions as scatter markers on the linked SXM browser."""
         if self.sxmBrowser is None or self.sxmBrowser.img is None:
             return
-        ax     = self.sxmBrowser.axes
-        colors = plt.cm.get_cmap(self.cmapSelection.value)(
-            np.linspace(0, 1, len(self.axes.lines)))
+        fig = self.sxmBrowser.figure
+        n_traces = len(self.figure.data)
+        colors = px.colors.sample_colorscale(
+            self._resolve_colorscale(self.cmapSelection.value), np.linspace(0, 1, max(n_traces, 2)))
+        # Remove previous location traces (keep only the base Heatmap at index 0)
+        if len(fig.data) > 1:
+            fig.data = fig.data[:1]
         k = 0
         for i, spec in enumerate(self.spec):
             if self.averageToggle.value and len(self.spec_data) % self.groupSize.value == 0:
                 if i not in range(0, len(self.spec), self.groupSize.value):
                     continue
             rx, ry = relative_position(self.sxmBrowser.img, spec)
-            if self.markerSelection.value != 'N':
-                ax.plot(rx, ry, marker=self.markerSelection.value,
-                        markersize=10, color=colors[k])
+            c = colors[k % len(colors)]
+            sym = self.markerSelection.value
+            if sym != 'N':
+                fig.add_trace(go.Scatter(
+                    x=[rx], y=[ry], mode='markers',
+                    marker=dict(symbol=sym, size=10, color=c),
+                    showlegend=False))
             else:
                 start = max(self.spec_index) - min(self.spec_index) + 1
-                ax.text(rx, ry, f'{start - i}', color='r', fontsize=10,
-                        ha='center', va='center')
+                with fig.batch_update():
+                    fig.layout.annotations = list(fig.layout.annotations) + [dict(
+                        x=rx, y=ry, text=f'{start - i}',
+                        font=dict(color='red', size=10), showarrow=False)]
             k += 1
-        self.sxmBrowser.figure.canvas.draw()
 
     def _compute_clim(self, z, x_ref, y_vals) -> tuple:
-        """Return (vmin, vmax) for the pcolormesh based on the current scale mode."""
+        """Return (vmin, vmax) for the 2D colorscale based on current mode."""
         mode = self.plot2DClimMode.value
         if mode == 'Custom':
             vmin, vmax = self.plot2DVMin.value, self.plot2DVMax.value
@@ -972,17 +982,10 @@ class fileBrowser(BaseBrowser):
         self.plot2DVMax.disabled = not is_custom
 
     def _render_2d(self) -> None:
-        """Render filtered spectra as a 2D pcolormesh."""
+        """Render filtered spectra as a 2D Heatmap (replaces pcolormesh)."""
         if not self.spec or self.loaded_experiments is None:
             return
-        ax = self.axes
-        if self.cb:
-            self.cb.remove()
-            self.cb = None
-        if self.axes2 is not None:
-            self.axes2.remove()
-            self.axes2 = None
-        ax.clear()
+        self.figure.data = ()
 
         x_values, y_values = self._apply_filters(self.spec_x, self.spec_data)
         n_spec = len(y_values)
@@ -997,7 +1000,7 @@ class fileBrowser(BaseBrowser):
             z[i] = yi if len(yi) == n_x else np.interp(x_ref, xi, yi)
 
         # Y axis values from header parameter or sequential index
-        y_param = self.plot2DYParam.value
+        y_param  = self.plot2DYParam.value
         averaged = (self.averageToggle.value
                     and len(self.spec_data) % self.groupSize.value == 0)
         step = self.groupSize.value if averaged else 1
@@ -1037,31 +1040,27 @@ class fileBrowser(BaseBrowser):
                 y_vals, y_label = y_arr, y_param
 
         vmin, vmax = self._compute_clim(z, x_ref, y_vals)
-        mesh = ax.pcolormesh(x_ref, y_vals, z,
-                             cmap=self.cmapSelection.value, shading='auto',
-                             vmin=vmin, vmax=vmax)
-        divider = make_axes_locatable(ax)
-        cax = divider.append_axes('right', size='5%', pad=0.05)
-        self.cb = self.figure.colorbar(mesh, cax=cax)
-        self.cb.set_label(
-            f'{self.channelYSelect.value[0]} ({self.spec_info[0]["y_unit"]})',
-            fontsize=self.fontsize)
-
+        y_ch   = f'{self.channelYSelect.value[0]} ({self.spec_info[0]["y_unit"]})'
         x_auto = f'{self.spec_info[0]["x_label"]} ({self.spec_info[0]["x_unit"]})'
-        ax.set_xlabel(self.plot2DXLabel.value or x_auto, fontsize=self.fontsize)
-        ax.set_ylabel(self.plot2DYLabel.value or y_label, fontsize=self.fontsize)
+
+        self.figure.add_trace(go.Heatmap(
+            z=z, x=x_ref, y=y_vals,
+            colorscale=self._resolve_colorscale(self.cmapSelection.value),
+            zmin=vmin, zmax=vmax,
+            colorbar=dict(title=dict(text=y_ch, side='right'), thickness=12),
+        ))
 
         xlo, xhi = self.plot2DXMin.value, self.plot2DXMax.value
         ylo, yhi = self.plot2DYMin.value, self.plot2DYMax.value
-        if xlo != xhi:
-            ax.set_xlim(xlo, xhi)
-        if ylo != yhi:
-            ax.set_ylim(ylo, yhi)
-
-        ax.set_title(self.spec_label, fontsize=self.titlesize, loc='left')
-        ax.xaxis.set_minor_locator(AutoMinorLocator(2))
-        ax.yaxis.set_minor_locator(AutoMinorLocator(2))
-        ax.tick_params(axis='both', which='both', direction='in')
+        self.figure.update_layout(
+            title=dict(text=self.spec_label, font=dict(size=self.titlesize), x=0),
+            xaxis=dict(title=self.plot2DXLabel.value or x_auto,
+                       range=[xlo, xhi] if xlo != xhi else None,
+                       ticks='inside', minor=dict(ticks='inside', ticklen=3)),
+            yaxis=dict(title=self.plot2DYLabel.value or y_label,
+                       range=[ylo, yhi] if ylo != yhi else None,
+                       ticks='inside', minor=dict(ticks='inside', ticklen=3)),
+        )
 
     # ------------------------------------------------------------------
     # Navigation
@@ -1092,43 +1091,79 @@ class fileBrowser(BaseBrowser):
 
     def _update_info_text(self) -> None:
         idx = self.spec_index[0]
-        self.filenameText.value = self.dat_files[idx]
+        self.filenameText.value  = self.dat_files[idx]
         self.selectionList.value = [self.dat_files[idx]]
 
     def _sync_axis_limit_sliders(self) -> None:
-        xmin, xmax, ymin, ymax = self.axes.axis()
+        """Update slider widgets from figure layout ranges or data extents."""
+        xr = self.figure.layout.xaxis.range
+        yr = self.figure.layout.yaxis.range
         if not self.xLimitLock.value:
-            self.xLimitsMin.value = xmin
-            self.xLimitsMax.value = xmax
+            if xr:
+                self.xLimitsMin.value, self.xLimitsMax.value = xr
+            elif self.spec_x:
+                all_x = np.concatenate(self.spec_x)
+                self.xLimitsMin.value = float(np.nanmin(all_x))
+                self.xLimitsMax.value = float(np.nanmax(all_x))
         if not self.yLimitLock.value:
-            self.yLimitsMin.value = ymin
-            self.yLimitsMax.value = ymax
+            if yr:
+                self.yLimitsMin.value, self.yLimitsMax.value = yr
+            elif self.spec_data:
+                all_y = np.concatenate(self.spec_data)
+                self.yLimitsMin.value = float(np.nanmin(all_y))
+                self.yLimitsMax.value = float(np.nanmax(all_y))
 
-    def _update_legend_parameters(self, a) -> None:
-        if a['owner'] == self.selectionList:
-            parameter_keys = ['Filename'] + list(self.spec[0].header.keys())
-            self.parameterLegendList.options = parameter_keys
-            self.parameterLegendList.value   = 'Filename'
+    def _update_legend_on_load(self) -> None:
+        """Sync legend parameter list and custom-text entries after a file load.
+
+        Runs under _loading so parameterLegendList observer (_update_display)
+        does not fire on stale traces before _redraw().
+        """
+        if not self.spec:
+            return
+        self._loading = True
+        self.parameterLegendList.options = ['Filename'] + list(self.spec[0].header.keys())
+        self.parameterLegendList.value   = 'Filename'
+        new_selection = list(self.selectionList.value)
+        if self.averageToggle.value and len(self.spec_data) % self.groupSize.value == 0:
+            new_selection = [new_selection[i]
+                             for i in range(0, len(new_selection), self.groupSize.value)]
+        self.legendText.options = new_selection
+        if new_selection:
+            self.legendText.value = new_selection[0]
+        self._loading = False
 
     def nextDisplay(self, a) -> None:
         idx = self.spec_index[-1]
         if idx < len(self.all_files) - 1:
             self.spec_index = [idx + 1]
-            self._update_info_text()
+            self._loading = True
+            self._update_info_text()   # sync UI; handler_file_selection suppressed
+            self._loading = False
+            try:
+                self.load_new_image()
+                self._update_legend_on_load()
+                self._redraw()
+            except Exception as err:
+                self.updateErrorText('navigation error: ' + str(err))
 
     def previousDisplay(self, a) -> None:
         idx = self.spec_index[0]
         if idx > 0:
             self.spec_index = [idx - 1]
+            self._loading = True
             self._update_info_text()
+            self._loading = False
+            try:
+                self.load_new_image()
+                self._update_legend_on_load()
+                self._redraw()
+            except Exception as err:
+                self.updateErrorText('navigation error: ' + str(err))
 
     # ------------------------------------------------------------------
     # Handlers
     # ------------------------------------------------------------------
-
-    def handler_settingsChange(self, a) -> None:
-        if a['owner'] != self.selectionList:
-            self.redraw_image(a)
 
     def handler_settingsDisplay(self, a) -> None:
         self._set_settings_visibility(self.settingsBtn.value)
@@ -1153,54 +1188,69 @@ class fileBrowser(BaseBrowser):
         self._redraw()
 
     def update_legend_settings(self, a) -> None:
-        if a['owner'] in (self.selectionList, self.averageToggle, self.groupSize):
-            new_selection = list(self.selectionList.value)
-            if self.averageToggle.value and len(self.spec_data) % self.groupSize.value == 0:
-                new_selection = [new_selection[i]
-                                 for i in range(0, len(new_selection), self.groupSize.value)]
-            self.legendText.options = new_selection
-            if new_selection:
-                self.legendText.value = new_selection[0]
+        """Re-slice legendText entries when averaging group size changes."""
+        new_selection = list(self.selectionList.value)
+        if self.averageToggle.value and len(self.spec_data) % self.groupSize.value == 0:
+            new_selection = [new_selection[i]
+                             for i in range(0, len(new_selection), self.groupSize.value)]
+        self.legendText.options = new_selection
+        if new_selection:
+            self.legendText.value = new_selection[0]
 
     def handler_folder_selection(self, a) -> None:
         index = 0
         if type(a) == type(self.refreshBtn):
             index = self.selectionList.index
         directory = self.directories[self.directorySelection.index]
-        self.sxm_files, self.dat_files = [], []
-        for f in os.listdir(directory):
-            if '.sxm' in f:
-                self.sxm_files.append(f)
-            elif '.dat' in f:
-                if 'all' in self.filterSelection.value or any(
-                        filt in f for filt in self.filterSelection.value):
-                    self.dat_files.append(f)
-        files = [(f, os.path.getmtime(os.path.join(directory, f))) for f in self.dat_files]
-        self.dat_files = [f[0] for f in sorted(files, key=lambda x: x[1], reverse=True)]
+        filter_vals = self.filterSelection.value
+        self.sxm_files = []
+        dat_entries = []
+        with os.scandir(directory) as it:
+            for e in it:
+                if e.name.endswith('.sxm'):
+                    self.sxm_files.append(e.name)
+                elif e.name.endswith('.dat'):
+                    if 'all' in filter_vals or any(f in e.name for f in filter_vals):
+                        dat_entries.append(e)
+        dat_entries.sort(key=lambda e: e.stat().st_mtime, reverse=True)
+        self.dat_files = [e.name for e in dat_entries]
         self.all_files = self.sxm_files + self.dat_files
+        # suppress handler_file_selection while syncing list widget state
+        self._loading = True
         self.selectionList.options = self.dat_files
         if self.dat_files:
-            self.filenameText.value = (self.dat_files[index] if isinstance(index, int)
-                                       else self.dat_files[index[0]])
-            if self.filenameText.value in self.selectionList.options:
-                self.selectionList.value = [self.filenameText.value]
+            first = (self.dat_files[index] if isinstance(index, int)
+                     else self.dat_files[index[0]])
+            self.filenameText.value = first
+            self.selectionList.value = [first]
             self.plasmonReference.options = (
                 ['None'] + [f for f in self.dat_files if 'stml' in f.lower()])
             self.plasmonReference.value = 'None'
+        self._loading = False
+        if self.dat_files:
+            self.spec_index = [0]
+            try:
+                self.load_new_image()
+                self._redraw()
+            except Exception as err:
+                self.updateErrorText('folder selection error: ' + str(err))
 
     def handler_file_selection(self, update) -> None:
+        if self._loading:
+            return
         self.spec_index = [self.dat_files.index(v) for v in self.selectionList.value]
         try:
             if self.selectionList.value:
                 self.load_new_image()
-                self._update_legend_parameters(update)
-                self.update_legend_settings(update)
+                self._update_legend_on_load()
                 self._redraw()
         except Exception as err:
             self.updateErrorText('file selection error: ' + str(err))
             print(traceback.format_exc())
 
     def handler_channel_selection(self, update) -> None:
+        if self._loading:
+            return
         try:
             if self.spec:
                 self.update_image_data()
@@ -1215,7 +1265,7 @@ class fileBrowser(BaseBrowser):
             self.newFilterText.value = ''
 
     def handler_update_plasmonic_reference(self, update) -> None:
-        if self.plasmonReference.value == 'None':
+        if self._loading or self.plasmonReference.value == 'None':
             return
         directory = self.directories[self.directorySelection.index]
         if directory != self.active_dir:
@@ -1231,6 +1281,7 @@ class fileBrowser(BaseBrowser):
             self.plasmonInfo['file']   = self.plasmonReference.value
             self.plasmonInfo['interp'] = interp1d(1240 / ref_x, ref_y,
                                                    bounds_error=False, fill_value=0.0)
+            self._redraw()   # reference is now loaded; redraw uses fresh interpolation
 
     def handler_update_axes(self, a) -> None:
         self.update_scan_info()
@@ -1238,24 +1289,31 @@ class fileBrowser(BaseBrowser):
 
     def handler_update_axes_limits(self, a) -> None:
         if a == self.xLimitsBtn:
-            self.axes.set_xlim(self.xLimitsMin.value, self.xLimitsMax.value)
-            if self.axes2 is not None:
-                self.axes2.set_xlim(1240 / self.xLimitsMax.value,
-                                    1240 / self.xLimitsMin.value)
+            xr = [self.xLimitsMin.value, self.xLimitsMax.value]
+            self.figure.update_layout(xaxis=dict(range=xr))
+            # Update STML wavelength axis to match new energy range
+            if self.figure.layout.xaxis2 and self.figure.layout.xaxis2.visible:
+                xmin, xmax = xr
+                e_ticks = np.linspace(xmin, xmax, 6)
+                e_ticks = e_ticks[e_ticks > 0]
+                self.figure.update_layout(xaxis2=dict(
+                    range=xr,
+                    tickvals=list(e_ticks),
+                    ticktext=[f'{1240 / e:.0f}' for e in e_ticks]))
         elif a == self.yLimitsBtn:
-            self.axes.set_ylim(self.yLimitsMin.value, self.yLimitsMax.value)
+            self.figure.update_layout(
+                yaxis=dict(range=[self.yLimitsMin.value, self.yLimitsMax.value]))
 
     # ------------------------------------------------------------------
     # Misc
     # ------------------------------------------------------------------
 
     def make_figure(self, figsize=(7, 5), cols: int = 1) -> None:
-        try:
-            if self.figure:
-                plt.close(self.figure)
-        except Exception as err:
-            print(err)
-        self.figure, self.axes = plt.subplots(ncols=cols, figsize=figsize)
-        if cols != 1:
-            self.axs  = self.axes[1:]
-            self.axes = self.axes[0]
+        """Reset the FigureWidget to an empty state (no plt.close needed for plotly)."""
+        self.figure.data = ()
+        self.figure.update_layout(
+            margin=dict(l=60, r=30, t=60, b=50), autosize=True, height=350)
+
+
+# Backward-compatible alias so __init__.py can `from .DAT_browser import spectrumBrowser`
+spectrumBrowser = fileBrowser

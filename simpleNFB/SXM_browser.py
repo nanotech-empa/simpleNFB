@@ -2,6 +2,7 @@
 SXM_browser.py
 --------------
 imageBrowser widget for Nanonis SXM scan data in Jupyter notebooks.
+Uses plotly FigureWidget for rendering (replaces matplotlib).
 '''
 
 import os
@@ -9,18 +10,16 @@ import traceback
 from pathlib import Path
 
 import ipywidgets as widgets
-import matplotlib.pyplot as plt
 import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
 from IPython import display
-from matplotlib.font_manager import FontProperties as fm
-from mpl_toolkits.axes_grid1 import make_axes_locatable
-from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
 from scipy.ndimage import gaussian_filter, gaussian_laplace, median_filter
 
 from spmpy import Spm
 from .base_browser import BaseBrowser
 from .process_utils import remove_line_average
-from .widget_helpers import HBox, VBox, Btn_Widget, Text_Widget, Selection_Widget
+from .widget_helpers import HBox, VBox, Btn_Widget, Text_Widget
 
 
 class fileBrowser(BaseBrowser):
@@ -28,8 +27,7 @@ class fileBrowser(BaseBrowser):
     Interactive browser for Nanonis SXM image data.
 
     Public attributes:
-        figure      – matplotlib Figure
-        axes        – matplotlib Axes
+        figure      – plotly FigureWidget (go.FigureWidget with a Heatmap trace)
         image_data  – ndarray of current processed image
         img         – Spm object for the loaded file
 
@@ -47,22 +45,35 @@ class fileBrowser(BaseBrowser):
     }
 
     def __init__(self, figsize=(6, 6), fontsize: int = 12, titlesize: int = 12,
-                 cmap: str = 'Greys_r', home_directory: str = './') -> None:
+                 cmap: str = 'greys', home_directory: str = './') -> None:
+        # Normalise cmap: strip matplotlib _r suffix → reversescale toggle
+        _cmap_lower = cmap.lower()
+        _reversed   = _cmap_lower.endswith('_r')
+        _cmap_base  = _cmap_lower[:-2] if _reversed else _cmap_lower
+        _available  = px.colors.named_colorscales()
+        self._cmap  = _cmap_base if _cmap_base in _available else 'greys'
+
         # --- state ---
         self.img = None
-        self.figure, self.axes = plt.subplots(ncols=1, num='sxm')
-        self.figure.canvas.header_visible = False
-        self.fontsize = fontsize
-        self.font = fm(size=fontsize, family='sans-serif')
+        self.figure = go.FigureWidget(data=[go.Heatmap(
+            z=[[0]], colorscale=self._cmap, reversescale=_reversed,
+            colorbar=dict(thickness=12, len=0.9))])
+        self.figure.update_layout(
+            margin=dict(l=60, r=60, t=80, b=60),
+            autosize=True, height=450,
+            xaxis=dict(scaleanchor='y'),
+            paper_bgcolor="rgb(0,0,0,0)",
+        )
+        self._apply_font_defaults()
+        self._setup_figure_autosize()
+        self.fontsize  = fontsize
         self.titlesize = titlesize
-        self.cb = None
         self.image_data = np.zeros((64, 64))
         self.image_info = {'height': 1, 'width': 1, 'unit': 'nm'}
         self.scan_dict: dict = {}
         self.scan_info = ''
         self.errors: list = []
         self.image_index = 0
-        self._cmap = cmap
         self._updating_limits = False
         self._scan_cache: dict = {}
 
@@ -71,47 +82,27 @@ class fileBrowser(BaseBrowser):
         self.dat_files: list = []
         self.directories = [self.active_dir]
 
-        self._build_widgets()
+        self._build_widgets(_reversed)
         self._build_layout()
         self._connect_observers()
         self.display()
-        with plt.ioff():
-            with self.figure_display:
-                self.figure_display.clear_output(wait=True)
-                plt.show(self.figure)
 
     # ------------------------------------------------------------------
     # Widget construction
     # ------------------------------------------------------------------
 
-    def _build_widgets(self) -> None:
+    def _build_widgets(self, reversed_scale: bool = True) -> None:
         """Instantiate all ipywidgets; no observers set here."""
-        L   = lambda w: widgets.Layout(visibility='visible', width=f'{w}px')
-        FL  = lambda w: widgets.Layout(display='flex', width=f'{w}%')
-        FLB = lambda w: widgets.Layout(display='flex', width=f'{w}%',
-                                       align_items='center', justify_content='center')
-        FLH = lambda w: widgets.Layout(visibility='hidden', display='flex', width=f'{w}%')
+        L, FL, FLB, FLH = self._layout_helpers()
         self._L = L
+        self._build_common_file_widgets()
 
         # selections
-        self.rootFolder = widgets.Text(
-            description='', layout=widgets.Layout(display='flex', width='90%'))
-        self.directorySelection = widgets.Select(
-            description='', options=self.directories, rows=8, layout=FL(98))
         self.selectionList = widgets.Select(
             description='', options=self.sxm_files, rows=27, layout=FL(98))
-        self.directoryDisplayDepth = widgets.Dropdown(
-            description='depth', value=1, options=['full', 1, 2, 3, 4, 5],
-            tooltip='Depth of folder structure shown in selection menu',
-            layout=FLB(75), style={'description_width': '40px'})
         self.channelSelect = widgets.Dropdown(description='', layout=L(165))
         self.refreshBtn = Btn_Widget(
             '', icon='refresh', tooltip='Reload file list', layout=FLB(24))
-
-        # text display
-        self.filenameText = Text_Widget('')
-        self.indexText    = Text_Widget('0')
-        self.errorText    = Selection_Widget([], 'Out:', rows=5)
         self.saveNote     = Text_Widget(
             '', description='',
             tooltip='This text is appended to filename when the figure is saved',
@@ -151,7 +142,6 @@ class fileBrowser(BaseBrowser):
         self.copyBtn = Btn_Widget(
             '', layout=FLB(24), icon='clipboard',
             tooltip='Save and copy displayed image to clipboard')
-        self.figure_display = widgets.Output(layout=FLB(99))
 
         # colormap
         self.vmin = widgets.FloatText(
@@ -161,8 +151,12 @@ class fileBrowser(BaseBrowser):
             value=1, description='Max:', step=.1,
             layout=FL(50), style={'description_width': '40px'})
         self.cmapSelection = widgets.Dropdown(
-            description='Color Map:', options=plt.colormaps(), value=self._cmap,
+            description='Color Map:', options=px.colors.named_colorscales(),
+            value=self._cmap,
             layout=FL(99), style={'description_width': '77px'})
+        self.reverseScaleToggle = widgets.ToggleButton(
+            description='', icon='exchange', value=reversed_scale, layout=L(40),
+            tooltip='Reverse colorscale direction')
 
         # settings panel — visibility toggles
         self.configOptionBtn = widgets.ToggleButton(
@@ -221,13 +215,11 @@ class fileBrowser(BaseBrowser):
         self.laplacToggle   = widgets.ToggleButton(value=False, description='Laplace',  layout=FLH(60))
         self.laplaceSize    = widgets.BoundedIntText(
             value=1, min=1, max=10, step=1, tooltip='Laplace kernel size',  layout=FLH(40))
+        self._build_font_widgets()
 
     def _build_layout(self) -> None:
         """Assemble widgets into HBox/VBox containers."""
-        FL  = lambda w: widgets.Layout(display='flex', width=f'{w}%')
-        FLB = lambda w: widgets.Layout(display='flex', width=f'{w}%',
-                                       align_items='center', justify_content='center')
-        FLH = lambda w: widgets.Layout(visibility='hidden', display='flex', width=f'{w}%')
+        _, FL, FLB, FLH = self._layout_helpers()
 
         self.h_process_btn_layout = HBox(children=[
             self.directionBtn, self.fixZeroBtn, self.linebylineBtn,
@@ -235,7 +227,8 @@ class fileBrowser(BaseBrowser):
         self.h_channel_layout = HBox(children=[
             widgets.Label('Channel'), self.channelSelect])
         self.v_color_layout = VBox(children=[
-            HBox(children=[self.vmin, self.vmax]), self.cmapSelection])
+            HBox(children=[self.vmin, self.vmax]),
+            HBox(children=[self.cmapSelection, self.reverseScaleToggle])])
         self.h_user_layout = HBox(
             children=[VBox(children=[self.h_channel_layout, self.h_process_btn_layout]),
                       self.v_color_layout],
@@ -250,53 +243,64 @@ class fileBrowser(BaseBrowser):
                 widgets.Label('Note')]),
             self.saveNote],
             layout=FL(20))
-        self.v_settings_layout = VBox(children=[
-            self.titleToggle, self.labelToggle,
-            self.labelLabel,
-            self.upperLeftSelect, self.upperRightSelect,
-            self.lowerLeftSelect, self.lowerRightSelect,
-            self.labelColorSelect, self.labelFontSize,
-            self.titleLabel,
-            self.channelToggle, self.setpointToggle, self.feedbackToggle,
-            self.locationToggle, self.depthSelection,
-            self.nameToggle, self.directionToggle, self.dateToggle,
-            self.titleFontSize, self.filterLabel,
-            HBox(children=[self.gaussianToggle, self.gaussianSize], layout=FLH(98)),
-            HBox(children=[self.medianToggle,   self.medianSize],   layout=FLH(98)),
-            HBox(children=[self.laplacToggle,   self.laplaceSize],  layout=FLH(98)),
-        ], layout=FLH(10))
+        self.v_settings_layout = widgets.Accordion(children=[
+            VBox(children=[
+                self.titleToggle, self.labelToggle,
+                self.labelLabel,
+                self.upperLeftSelect, self.upperRightSelect,
+                self.lowerLeftSelect, self.lowerRightSelect,
+                self.labelColorSelect, self.labelFontSize,
+            ], layout=FLH(98)),
+            VBox(children=[
+                self.titleLabel,
+                self.channelToggle, self.setpointToggle, self.feedbackToggle,
+                self.locationToggle, self.depthSelection,
+                self.nameToggle, self.directionToggle, self.dateToggle,
+                self.titleFontSize,
+            ], layout=FLH(98)),
+            VBox(children=[
+                self.filterLabel,
+                HBox(children=[self.gaussianToggle, self.gaussianSize], layout=FLH(98)),
+                HBox(children=[self.medianToggle,   self.medianSize],   layout=FLH(98)),
+                HBox(children=[self.laplacToggle,   self.laplaceSize],  layout=FLH(98)),
+            ], layout=FLH(98)),
+            self._font_settings_tab(),
+        ], layout=FLH(10),
+        titles=['Label Settings', 'Title Settings', 'Filter Settings', 'Font Settings'])
+        # FigureWidget is itself a widget — no Output wrapper needed
         self.v_image_layout = VBox(
-            children=[self.figure_display, self.h_user_layout], layout=FLB(70))
-        self.mainlayout = VBox(children=[
-            HBox(children=[
-                widgets.Label('Session', layout=widgets.Layout(
-                    display='flex', justify_content='flex-start', width='10%')),
-                self.rootFolder], layout=FL(99)),
-            HBox(children=[self.v_file_layout, self.v_image_layout,
-                           self.v_settings_layout], layout=FL(99))],
-            layout=FL(100))
-
-        self.v_settings_layout.layout.min_width = '200px'
-        self.v_file_layout.layout.min_width = '200px'
+            children=[self.figure, self.h_user_layout], layout=FLB(70))
+        self._build_main_layout(self.v_file_layout, self.v_image_layout, 10)
 
     def _connect_observers(self) -> None:
         """Wire all observe() and on_click() callbacks."""
-        for child in self.v_settings_layout.children:
-            if hasattr(child, 'children'):
-                for ch in child.children:
-                    ch.observe(self.handler_settingsChange, names='value')
-            child.observe(self.handler_settingsChange, names='value')
+        # Tier 1 — layout update only (colormap, labels, fonts; no data reprocessing)
+        for w in (self.titleToggle, self.labelToggle,
+                  self.upperLeftSelect, self.upperRightSelect,
+                  self.lowerLeftSelect, self.lowerRightSelect,
+                  self.labelColorSelect, self.labelFontSize, self.titleFontSize,
+                  self.reverseScaleToggle, self.cmapSelection):
+            w.observe(self._redraw, names='value')
+
+        # Tier 2 — rebuild title text then redraw (no filter pipeline)
+        for w in (self.channelToggle, self.setpointToggle, self.feedbackToggle,
+                  self.locationToggle, self.depthSelection,
+                  self.nameToggle, self.directionToggle, self.dateToggle):
+            w.observe(self._refresh_info, names='value')
+
+        # Tier 3 — full pipeline (filter/channel processing required)
+        for w in (self.gaussianToggle, self.gaussianSize,
+                  self.medianToggle,   self.medianSize,
+                  self.laplacToggle,   self.laplaceSize,
+                  self.linebylineBtn, self.flattenBtn,
+                  self.invertBtn, self.fixZeroBtn):
+            w.observe(self.redraw_image, names='value')
+
+        self._connect_font_observers()
         self.saveBtn.on_click(self.save_figure)
         self.copyBtn.on_click(self.copy_figure)
         self.configOptionBtn.observe(self.handler_configOptionsDisplay, names='value')
-
         self.directionBtn.observe(self.update_scan_direction, names='value')
-        self.linebylineBtn.observe(self.redraw_image, names='value')
-        self.flattenBtn.observe(self.redraw_image, names='value')
-        self.invertBtn.observe(self.redraw_image, names='value')
-        self.fixZeroBtn.observe(self.redraw_image, names='value')
-        self.edgesBtn.observe(self.redraw_image, names='value')
-        self.gaussianBtn.observe(self.redraw_image, names='value')
         self.vmin.observe(self._on_limits_change, names='value')
         self.vmax.observe(self._on_limits_change, names='value')
 
@@ -307,7 +311,6 @@ class fileBrowser(BaseBrowser):
         self.directorySelection.observe(self.handler_folder_selection, names='value')
         self.selectionList.observe(self.handler_file_selection, names='value')
         self.channelSelect.observe(self.handler_channel_selection, names='value')
-        self.cmapSelection.observe(self._redraw, names='value')
         self.rootFolder.observe(self.handler_root_folder_update, names='value')
 
     # ------------------------------------------------------------------
@@ -317,13 +320,11 @@ class fileBrowser(BaseBrowser):
     def display(self) -> None:
         """Render the browser widget."""
         display.clear_output(wait=True)
-        display.display(self.mainlayout)
+        display.display(self.h_main_layout)
 
     def _redraw(self, *_) -> None:
-        """Update axes and redraw the canvas."""
+        """Update axes; FigureWidget updates reactively — no canvas.draw() needed."""
         self.update_axes()
-        self.figure.tight_layout(pad=1)
-        self.figure.canvas.draw()
 
     def _on_limits_change(self, _) -> None:
         """Callback for vmin/vmax changes; skipped during batch limit updates."""
@@ -334,21 +335,8 @@ class fileBrowser(BaseBrowser):
     # File I/O
     # ------------------------------------------------------------------
 
-    def save_figure(self, a) -> None:
-        """Save the current figure to browser_outputs/ at 500 dpi."""
-        self.saveBtn.icon = 'hourglass-start'
-        out_dir = self.active_dir / 'browser_outputs'
-        out_dir.mkdir(exist_ok=True)
-        stem = (f'{str(self.directorySelection.value).split(chr(92))[-1]}'
-                f'_{self.img.name.split(".")[0]}_{self.channelSelect.value}')
-        if self.saveNote.value:
-            stem += f'_{self.saveNote.value}'
-        self.last_save_fname = str(out_dir / f'{stem}.png')
-        self.figure.savefig(self.last_save_fname, dpi=500, format='png',
-                            transparent=True, bbox_inches='tight')
-        self.updateErrorText('Figure Saved')
-        self.saveNote.value = ''
-        self.saveBtn.icon = 'file-image-o'
+    def _figure_stem(self, dir_name: str) -> str:
+        return f'{dir_name}_{self.img.name.split(".")[0]}_{self.channelSelect.value}'
 
     # ------------------------------------------------------------------
     # Image generation
@@ -368,8 +356,10 @@ class fileBrowser(BaseBrowser):
         self.img = Spm(str(directory / self.sxm_files[self.image_index]))
         self._scan_cache = {}
         self.filenameText.value = self.all_files[self.image_index]
-        self._update_channel_selection()
-        self.update_image_data()
+        self._loading = True
+        self._update_channel_selection()   # channel observer suppressed
+        self._loading = False
+        self.update_image_data()           # runs exactly once
 
     def _cache_scan_param(self, key: str):
         """Return img.get_param(key), caching the result until next file load."""
@@ -435,7 +425,7 @@ class fileBrowser(BaseBrowser):
                 'size': (width, height, angle),
                 'z_offset': z_offset, 'comment': comment,
             })
-            mode = ('Constant Height $\\rightarrow$ z-offset: %.3f%s' % z_offset
+            mode = ('Constant Height → z-offset: %.3f%s' % z_offset
                     if fb_enable == 'OFF' else 'Constant Current')
             if abs(bias[0]) < 0.1:
                 bias = (bias[0] * 1000, 'mV')
@@ -443,7 +433,7 @@ class fileBrowser(BaseBrowser):
 
             if self.channelToggle.value:
                 ch_str = f'channel: {self.channelSelect.value}'
-                label.append(f'{ch_str} $\\rightarrow$ {mode}'
+                label.append(f'{ch_str} → {mode}'
                               if self.feedbackToggle.value else ch_str)
             if self.setpointToggle.value:
                 label.append(f'setpoint: I = {set_point[0]:.0f}{set_point[1]}, '
@@ -457,73 +447,80 @@ class fileBrowser(BaseBrowser):
                 name_str = f'filename: {self.img.name}'
                 if self.directionToggle.value:
                     d = 'backward' if self.directionBtn.value else 'forward'
-                    name_str += f' $\\rightarrow$ direction: {d}'
+                    name_str += f' → direction: {d}'
                 label.append(name_str)
             self.scan_dict['filename'] = self.img.name
             if self.dateToggle.value:
                 label.append(f'Date: {self.img.header["rec_date"]} {self.img.header["rec_time"]}')
             self.scan_dict['date'] = f'{self.img.header["rec_date"]} {self.img.header["rec_time"]}'
 
-        self.scan_info = '\n'.join(label) if self.titleToggle.value else ''
+        self.scan_info = '<br>'.join(label) if self.titleToggle.value else ''
 
     def update_axes(self) -> None:
-        """Render image_data onto the figure axes."""
+        """Render image_data onto the FigureWidget via batch_update."""
         if self.img is None:
             return
-        ax = self.axes
-        ax.clear()
-        img_origin = ('upper' if self._cache_scan_param('scan_dir') == 'down'
-                      else 'lower')
-        height = self.image_info['height']
-        width  = self.image_info['width']
-        data   = self.image_data[~np.isnan(self.image_data).any(axis=1)]
+        scan_dir = self._cache_scan_param('scan_dir')
+        height   = self.image_info['height']
+        width    = self.image_info['width']
+        # strip NaN rows introduced by partially-completed scans
+        data     = self.image_data[~np.isnan(self.image_data).any(axis=1)]
         row, col = self.image_data.shape
-        y, x = data.shape
-        w, h = width * x / col, height * y / row
+        y_px, x_px = data.shape
+        w_crop = width  * x_px / col
+        h_crop = height * y_px / row
 
-        axesImage = ax.imshow(data, aspect='equal', origin=img_origin,
-                              extent=[0, w, 0, h],
-                              cmap=self.cmapSelection.value,
-                              vmin=self.vmin.value, vmax=self.vmax.value)
-        if not self.cb:
-            divider = make_axes_locatable(ax)
-            cax = divider.append_axes('right', size='3%', pad=0.02)
-            self.cb = self.figure.colorbar(axesImage, cax=cax)
-        else:
-            self.cb.update_normal(axesImage)
-        self.cb.set_label(f'{self.channelSelect.value} ({self.image_info["unit"]})',
-                          fontsize=8, labelpad=0, rotation=270)
-        self.cb.set_ticks([self.vmin.value, self.vmax.value])
-        self.cb.set_ticklabels([f'{self.vmin.value:.2f}', f'{self.vmax.value:.2f}'],
-                               fontsize=8, rotation=270, verticalalignment='center')
-        self.cb.ax.tick_params(length=0)
-        tl = self.cb.ax.get_yticklabels()
-        tl[0].set_verticalalignment('bottom')
-        tl[1].set_verticalalignment('top')
+        # Plotly Heatmap: first z-row → bottom of plot by default.
+        # scan_dir='down' matches matplotlib origin='upper' → flip z so the
+        # first data row appears at the top (y increases downward in scan coords).
+        z = data[::-1] if scan_dir == 'down' else data
 
-        ax.set_title(self.scan_info, fontsize=self.titleFontSize.value, loc='left')
-        ax.set_xlabel('x (nm)', fontsize=self.labelFontSize.value)
-        ax.set_ylabel('y (nm)', fontsize=self.labelFontSize.value)
-        ax.set_xticks([0, w])
-        ax.set_xticklabels([0, round(w, 2)], fontsize=self.labelFontSize.value)
-        ax.set_yticks([0, h])
-        ax.set_yticklabels([0, round(h, 2)], fontsize=self.labelFontSize.value)
+        vmin = self.vmin.value
+        vmax = self.vmax.value
+        channel = self.channelSelect.value
+        unit    = self.image_info['unit']
+
+        with self.figure.batch_update():
+            hm = self.figure.data[0]
+            hm.z          = z
+            hm.x          = np.linspace(0, w_crop, x_px)
+            hm.y          = np.linspace(0, h_crop, y_px)
+            hm.zmin       = vmin
+            hm.zmax       = vmax
+            hm.colorscale = self._resolve_colorscale(self.cmapSelection.value)
+            hm.reversescale = self.reverseScaleToggle.value
+            hm.colorbar   = dict(
+                title=dict(text=f'{channel} ({unit})', side='right'),
+                thickness=12, len=0.9,
+                tickvals=[vmin, vmax],
+                ticktext=[f'{vmin:.2f}', f'{vmax:.2f}'],
+            )
+            show_axes = not self.labelToggle.value
+            self.figure.update_layout(
+                title=dict(text=self.scan_info,
+                           font=dict(size=self.titleFontSize.value), x=0),
+                xaxis=dict(title='x (nm)', tickvals=[0, w_crop],
+                           ticktext=['0', f'{w_crop:.2f}'],
+                           visible=show_axes, scaleanchor='y'),
+                yaxis=dict(title='y (nm)', tickvals=[0, h_crop],
+                           ticktext=['0', f'{h_crop:.2f}'],
+                           visible=show_axes),
+                annotations=[], shapes=[],
+            )
+
         if self.labelToggle.value:
-            ax.axis('off')
-            self._add_figure_labels()
-        else:
-            ax.axis('on')
+            self._add_figure_labels(w_crop, h_crop)
 
-    def _add_figure_labels(self) -> None:
-        """Overlay corner text / scalebar annotations on the axes."""
+    def _add_figure_labels(self, w: float, h: float) -> None:
+        """Overlay corner text / scalebar annotations via plotly paper-coords."""
         color = self.labelColorSelect.value
-        ax    = self.axes
-        w, h  = ax.get_xlim()[1], ax.get_ylim()[1]
+        fs    = self.labelFontSize.value
+        # Paper-fraction corners: xf, yf ∈ [0,1] map to axes area edges
         corners = {
-            'upper left':  (self.upperLeftSelect.value,  0.03 * w, 0.97 * h),
-            'upper right': (self.upperRightSelect.value, 0.97 * w, 0.97 * h),
-            'lower left':  (self.lowerLeftSelect.value,  0.03 * w, 0.03 * h),
-            'lower right': (self.lowerRightSelect.value, 0.97 * w, 0.03 * h),
+            'upper left':  (self.upperLeftSelect.value,  0.03, 0.97),
+            'upper right': (self.upperRightSelect.value, 0.97, 0.97),
+            'lower left':  (self.lowerLeftSelect.value,  0.03, 0.03),
+            'lower right': (self.lowerRightSelect.value, 0.97, 0.03),
         }
         text_map = {
             'channel':  str(self.channelSelect.value),
@@ -536,24 +533,52 @@ class fileBrowser(BaseBrowser):
                                                   ('M', self.medianToggle),
                                                   ('LP', self.laplacToggle)] if t.value),
         }
-        for position, (selection, x_pos, y_pos) in corners.items():
+        annotations, shapes = [], []
+        iw = self.image_info['width']
+
+        for position, (selection, xf, yf) in corners.items():
             if selection == 'none':
                 continue
             ha, va = self._ALIGN_PARAMS[position]
+            xanchor = ha           # 'left' | 'right'
+            yanchor = va           # 'top'  | 'bottom'
+
             if selection == 'scalebar':
-                iw = self.image_info['width']
-                standards = [.1, .2, .5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000]
-                sb_len    = min(standards, key=lambda x: abs(x - iw * 0.20))
-                label     = f'{sb_len * 10:.0f} Å' if sb_len < 1 else f'{sb_len:.0f} nm'
-                self.font = fm(size=self.labelFontSize.value, family='sans-serif')
-                ax.add_artist(AnchoredSizeBar(
-                    ax.transAxes, sb_len / iw, label, position,
-                    frameon=False, color=color, label_top=True,
-                    sep=1, pad=1, fontproperties=self.font, size_vertical=1e-2))
+                standards = [.1, .2, .5, 1, 2, 5, 10, 20, 50,
+                             100, 200, 500, 1000, 2000, 5000]
+                sb_len = min(standards, key=lambda x: abs(x - iw * 0.20))
+                label  = f'{sb_len * 10:.0f} Å' if sb_len < 1 else f'{sb_len:.0f} nm'
+                frac   = sb_len / iw  # bar length in paper-fraction of image width
+
+                # Horizontal bar position in paper coords
+                if ha == 'right':
+                    bar_x1, bar_x0 = xf, xf - frac
+                else:
+                    bar_x0, bar_x1 = xf, xf + frac
+                # Vertical position of bar and label (label always above bar)
+                bar_y  = 0.08 if va == 'bottom' else 0.90
+                lbl_y  = bar_y + 0.04
+
+                shapes.append(dict(
+                    type='line', x0=bar_x0, x1=bar_x1, y0=bar_y, y1=bar_y,
+                    xref='paper', yref='paper',
+                    line=dict(color=color, width=3)))
+                annotations.append(dict(
+                    x=(bar_x0 + bar_x1) / 2, y=lbl_y, text=label,
+                    xref='paper', yref='paper',
+                    xanchor='center', yanchor='bottom', showarrow=False,
+                    font=dict(size=fs, color=color)))
                 continue
-            ax.text(x_pos, y_pos, text_map.get(selection, ''),
-                    fontsize=self.labelFontSize.value,
-                    verticalalignment=va, horizontalalignment=ha, color=color)
+
+            annotations.append(dict(
+                x=xf, y=yf, text=text_map.get(selection, ''),
+                xref='paper', yref='paper',
+                xanchor=xanchor, yanchor=yanchor,
+                showarrow=False, font=dict(size=fs, color=color)))
+
+        with self.figure.batch_update():
+            self.figure.layout.annotations = annotations
+            self.figure.layout.shapes      = shapes
 
     # ------------------------------------------------------------------
     # Navigation
@@ -566,18 +591,32 @@ class fileBrowser(BaseBrowser):
                                     else self.img.channels[0])
 
     def _update_info_text(self) -> None:
-        self.filenameText.value = self.all_files[self.image_index]
+        self.filenameText.value  = self.all_files[self.image_index]
         self.selectionList.value = self.all_files[self.image_index]
 
     def nextDisplay(self, a) -> None:
         if self.image_index < len(self.all_files) - 1:
             self.image_index += 1
-            self._update_info_text()
+            self._loading = True
+            self._update_info_text()   # sync UI; handler_file_selection suppressed
+            self._loading = False
+            try:
+                self.load_new_image()
+                self._redraw()
+            except Exception as err:
+                self.updateErrorText('navigation error: ' + str(err))
 
     def previousDisplay(self, a) -> None:
         if self.image_index > 0:
             self.image_index -= 1
+            self._loading = True
             self._update_info_text()
+            self._loading = False
+            try:
+                self.load_new_image()
+                self._redraw()
+            except Exception as err:
+                self.updateErrorText('navigation error: ' + str(err))
 
     def update_scan_direction(self, a) -> None:
         self.directionBtn.icon = ('caret-square-o-left' if self.directionBtn.value
@@ -591,9 +630,6 @@ class fileBrowser(BaseBrowser):
     # ------------------------------------------------------------------
     # Handlers
     # ------------------------------------------------------------------
-
-    def handler_settingsChange(self, a) -> None:
-        self.redraw_image(a)
 
     def handler_configOptionsDisplay(self, a) -> None:
         self._set_settings_visibility(self.configOptionBtn.value)
@@ -613,14 +649,23 @@ class fileBrowser(BaseBrowser):
                 self.dat_files.append(entry)
         self.all_files = self.sxm_files + self.dat_files
         self.sxm_files = list(np.flip(self.sxm_files))
+        # suppress handler_file_selection while syncing list widget state
+        self._loading = True
         self.selectionList.options = self.sxm_files
         if self.sxm_files:
             self.filenameText.value = self.sxm_files[index]
-            if self.filenameText.value in self.selectionList.options:
-                self.selectionList.value = self.filenameText.value
+            self.selectionList.value = self.sxm_files[index]
+        self._loading = False
+        if self.sxm_files:
+            self.image_index = index
+            try:
+                self.load_new_image()
+                self._redraw()
+            except Exception as err:
+                self.updateErrorText('folder selection error: ' + str(err))
 
     def handler_file_selection(self, update) -> None:
-        if self.selectionList.value is None:
+        if self._loading or self.selectionList.value is None:
             return
         self.image_index = self.sxm_files.index(self.selectionList.value)
         try:
@@ -631,8 +676,14 @@ class fileBrowser(BaseBrowser):
             print(traceback.format_exc())
 
     def handler_channel_selection(self, update) -> None:
+        if self._loading:
+            return
         try:
             self.update_image_data()
             self._redraw()
         except Exception as err:
             self.updateErrorText('channel selection error: ' + str(err))
+
+
+# Backward-compatible alias so __init__.py can `from .SXM_browser import imageBrowser`
+imageBrowser = fileBrowser
