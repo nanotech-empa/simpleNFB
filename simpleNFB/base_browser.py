@@ -54,6 +54,12 @@ class BaseBrowser:
     # (e.g. during file load or navigation).  Instance assignment shadows this default.
     _loading: bool = False
 
+    # Reference counter for nested busy calls; status clears only when it reaches 0
+    _busy_count: int = 0
+
+    # Subclasses set this to 'sxm' or 'dat' to pick their template subdirectory
+    _TEMPLATES_SUBDIR: str = ''
+
     # ------------------------------------------------------------------
     # Layout utilities
     # ------------------------------------------------------------------
@@ -93,15 +99,20 @@ class BaseBrowser:
         from .widget_helpers import HBox, VBox
         _, FL, _, _ = self._layout_helpers()
 
+        self._status_widget = widgets.HTML(
+            value=self._status_html(False),
+            layout=widgets.Layout(flex='0 0 auto', margin='0 0 0 8px'),
+        )
         self.h_main_layout = VBox(children=[
             HBox(children=[
                 widgets.Label('Session', layout=widgets.Layout(
                     display='flex', justify_content='flex-start',
                     width=f'{session_label_width}%')),
-                self.rootFolder], layout=FL(99)),
+                self.rootFolder,
+                self._status_widget], layout=FL(99)),
             HBox(children=[file_col, img_col, self.v_settings_layout], layout=FL(99))],
             layout=FL(100))
-        self.v_settings_layout.layout.min_width = '200px'
+        self.v_settings_layout.layout.min_width = '300px'
         file_col.layout.min_width = '200px'
 
     # ------------------------------------------------------------------
@@ -121,46 +132,52 @@ class BaseBrowser:
             return [[i / max(n - 1, 1), c] for i, c in enumerate(colors)]
         return name
 
-    def _setup_figure_autosize(self) -> None:
-        """Observe JS→Python relayout syncs to keep height proportional to width."""
-        self._aspect = None
-        self._fig_resizing = False
+
+    def _setup_figure_autosize(self, fig_width: int = None, fig_height: int = None) -> None:
+        """Register the JS->Python relayout observer used by subclass hooks (e.g. STML axis sync)."""
         self.figure.observe(self._on_figure_relayout, names=['_js2py_relayout'])
 
     def _on_figure_relayout(self, change) -> None:
-        if self._fig_resizing:
-            return
-        data = change.get('new') or {}
-        relayout_data = data.get('relayout_data', {})
-        w = relayout_data.get('width')
-        if not w or w <= 0:
-            return
-        if self._aspect is None:
-            h = relayout_data.get('height') or self.figure.layout.height
-            if h:
-                self._aspect = h / w
-            return
-        target_h = round(w * self._aspect)
-        if abs((self.figure.layout.height or 0) - target_h) > 2:
-            self._fig_resizing = True
-            try:
-                self.figure.update_layout(height=target_h)
-            finally:
-                self._fig_resizing = False
+        """Hook for subclasses (e.g. STML axis sync). Base class is a no-op."""
+        pass
 
-    def _build_font_widgets(self) -> None:
-        """Create figure font/layout control widgets as self.fig* attributes."""
+    def _build_figure_settings_widgets(self, fig_width: int = 600, fig_height: int = 500) -> None:
+        """Create figure settings widgets (size, bg, axes, fonts, templates)."""
         import ipywidgets as widgets
-        W98 = widgets.Layout(display='flex', width='98%')
-        W48 = widgets.Layout(display='flex', width='48%')
-        fWidth = lambda percent: widgets.Layout(display='flex', width=f'{percent}%')
-        ds  = lambda px: {'description_width': f'{px}px'}
+        W98    = widgets.Layout(display='flex', width='98%')
+        fWidth = lambda p: widgets.Layout(display='flex', width=f'{p}%')
+        ds     = lambda px: {'description_width': f'{px}px'}
 
+        # Size
+        self.figWidth  = widgets.BoundedIntText(
+            value=fig_width,  min=100, max=4000, description='W (px):',
+            layout=fWidth(48), style=ds(46))
+        self.figHeight = widgets.BoundedIntText(
+            value=fig_height, min=100, max=4000, description='H (px):',
+            layout=fWidth(48), style=ds(46))
+        # Background
+        self.figBgColor = widgets.ColorPicker(
+            value='white', description='BG:', concise=False, layout=W98, style=ds(28))
+
+        # Axes display
+        self.figAxesBorderToggle = widgets.ToggleButton(
+            value=True, description='Axes Border', layout=fWidth(48))
+        self.figGridToggle = widgets.ToggleButton(
+            value=False, description='Grid', layout=fWidth(48))
+        self.figTicksMode = widgets.ToggleButtons(
+            options=['inside', 'outside'], value='outside', description='Ticks:',
+            layout=W98, style={'description_width': '42px', 'button_width': 'auto'})
+        self.figXTickCount = widgets.Text(
+            value='auto', description='X ticks:', layout=fWidth(48), style=ds(50))
+        self.figYTickCount = widgets.Text(
+            value='auto', description='Y ticks:', layout=fWidth(48), style=ds(50))
+
+        # Font
         self.figFontFamily = widgets.Dropdown(
             options=['Arial', 'Helvetica', 'Times New Roman', 'Courier New', 'Georgia', 'Verdana'],
             value='Arial', description='Font:', layout=W98, style=ds(40))
         self.figTitleSize = widgets.BoundedIntText(
-            value=14, min=4, max=48, description='Title:', layout=fWidth(62), style=ds(38))
+            value=8, min=4, max=48, description='Title:', layout=fWidth(62), style=ds(38))
         self.figTitleColor = widgets.ColorPicker(
             value='black', description='', concise=True, layout=fWidth(34))
         self.figAxesLabelSize = widgets.BoundedIntText(
@@ -175,52 +192,216 @@ class BaseBrowser:
             value=11, min=4, max=28, description='Legend:', layout=fWidth(62), style=ds(50))
         self.figLegendColor = widgets.ColorPicker(
             value='black', description='', concise=True, layout=fWidth(34))
-        self.figFontApplyBtn = widgets.Button(description='Apply Font', layout=W98)
+        self.figFontApplyBtn = widgets.Button(description='Apply Settings', layout=W98)
 
-    def _font_settings_tab(self):
-        """Return a VBox suitable for an accordion tab with font/layout controls."""
+        # Templates
+        self._templates: dict = {}
+        self._templates_dir = (
+            Path(__file__).parent / 'templates' / self._TEMPLATES_SUBDIR)
+        self._templates_dir.mkdir(parents=True, exist_ok=True)
+        self.figTemplateName = widgets.Text(
+            value='', placeholder='template name', description='Name:',
+            layout=W98, style=ds(40))
+        self.figSaveTemplateBtn  = widgets.Button(description='Save as Template', layout=W98)
+        self.figTemplateList     = widgets.Select(options=[], rows=4, layout=W98)
+        self.figApplyTemplateBtn = widgets.Button(description='Apply Template', layout=W98)
+        self._load_templates_dir()  # needs figTemplateList to exist first
+
+    # keep old name as alias so any external callers don't break
+    def _build_font_widgets(self, fig_width: int = 600, fig_height: int = 500) -> None:
+        self._build_figure_settings_widgets(fig_width, fig_height)
+
+    def _figure_settings_tab(self):
+        """Return a VBox for the Figure Settings accordion tab."""
         import ipywidgets as widgets
         W98 = widgets.Layout(display='flex', width='98%')
-        HB  = lambda *ws: widgets.HBox(children=list(ws),
-                                       layout=widgets.Layout(display='flex', width='98%'))
+        HB  = lambda *ws: widgets.HBox(children=list(ws), layout=W98)
         return widgets.VBox(children=[
+            widgets.Label('-- Size --', layout=W98),
+            self.figHeight,
+            widgets.Label('-- Background --', layout=W98),
+            self.figBgColor,
+            widgets.Label('-- Axes --', layout=W98),
+            HB(self.figAxesBorderToggle, self.figGridToggle),
+            self.figTicksMode,
+            HB(self.figXTickCount, self.figYTickCount),
+            widgets.Label('-- Font --', layout=W98),
             self.figFontFamily,
-            widgets.Label('── Title ──', layout=W98),
+            widgets.Label('-- Title --', layout=W98),
             HB(self.figTitleSize, self.figTitleColor),
-            widgets.Label('── Axes labels ──', layout=W98),
+            widgets.Label('-- Axes labels --', layout=W98),
             HB(self.figAxesLabelSize, self.figAxesLabelColor),
-            widgets.Label('── Tick labels ──', layout=W98),
+            widgets.Label('-- Tick labels --', layout=W98),
             HB(self.figTickSize, self.figTickColor),
-            widgets.Label('── Legend ──', layout=W98),
+            widgets.Label('-- Legend --', layout=W98),
             HB(self.figLegendSize, self.figLegendColor),
             self.figFontApplyBtn,
+            widgets.Label('-- Templates --', layout=W98),
+            self.figTemplateName,
+            self.figSaveTemplateBtn,
+            self.figTemplateList,
+            self.figApplyTemplateBtn,
         ], layout=widgets.Layout(visibility='hidden', display='flex',
                                  width='98%', flex_flow='column'))
 
+    # keep old name as alias
+    def _font_settings_tab(self):
+        return self._figure_settings_tab()
+
+    @staticmethod
+    def _parse_tick_count(val: str) -> int:
+        """Return nticks int (0 = plotly auto) from 'auto' or numeric string."""
+        try:
+            return max(0, int(val))
+        except (ValueError, TypeError):
+            return 0
+
     def _apply_figure_layout(self, _=None) -> None:
-        """Apply current font widget values to the figure."""
-        family = self.figFontFamily.value
-        self.figure.update_layout(
-            font=dict(family=family),
+        """Apply all Figure Settings widget values to the live figure."""
+        ticks     = self.figTicksMode.value
+        show_grid = self.figGridToggle.value
+        show_line = self.figAxesBorderToggle.value
+        nticks_x  = self._parse_tick_count(self.figXTickCount.value)
+        nticks_y  = self._parse_tick_count(self.figYTickCount.value)
+        new_h = self.figHeight.value
+
+        layout_kwargs = dict(
+            autosize=True,
+            height=new_h,
+            font=dict(family=self.figFontFamily.value),
             title=dict(font=dict(size=self.figTitleSize.value,
                                  color=self.figTitleColor.value)),
             legend=dict(font=dict(size=self.figLegendSize.value,
                                   color=self.figLegendColor.value)),
+            paper_bgcolor=self.figBgColor.value,
+            plot_bgcolor=self.figBgColor.value,
         )
-        self.figure.update_xaxes(
+        self.figure.update_layout(**layout_kwargs)
+        axis_common = dict(
             title_font=dict(size=self.figAxesLabelSize.value,
                             color=self.figAxesLabelColor.value),
             tickfont=dict(size=self.figTickSize.value, color=self.figTickColor.value),
+            ticks=ticks, showgrid=show_grid,
+            showline=show_line, linewidth=1, linecolor='black', mirror=show_line,
         )
-        self.figure.update_yaxes(
-            title_font=dict(size=self.figAxesLabelSize.value,
-                            color=self.figAxesLabelColor.value),
-            tickfont=dict(size=self.figTickSize.value, color=self.figTickColor.value),
-        )
+        self.figure.update_xaxes(**axis_common, nticks=nticks_x)
+        self.figure.update_yaxes(**axis_common, nticks=nticks_y)
 
-    def _connect_font_observers(self) -> None:
-        """Wire the Apply Font button."""
+    def _template_extra_save(self) -> dict:
+        """Hook: return extra key/value pairs to store alongside the plotly template.
+        Subclasses (e.g. SXM_browser) override to capture widget state beyond fonts/axes."""
+        return {}
+
+    def _template_extra_apply(self, entry: dict) -> None:
+        """Hook: apply any extra data stored in *entry* back to the browser widgets.
+        Subclasses override to restore widget state captured by _template_extra_save."""
+        pass
+
+    def _template_safe_name(self, name: str) -> str:
+        """Return a filesystem-safe stem derived from the template name."""
+        safe = ''.join(c if c.isalnum() or c in '-_ ' else '_' for c in name)
+        return safe.replace(' ', '_')
+
+    def _save_template_file(self, name: str) -> None:
+        """Write a single template to its own JSON file in the templates directory."""
+        import json
+        entry = self._templates[name]
+        fpath = self._templates_dir / f'{self._template_safe_name(name)}.json'
+        data = {
+            'name': name,
+            'template': entry['template'].to_plotly_json(),
+            **{k: v for k, v in entry.items() if k != 'template'},
+        }
+        try:
+            fpath.write_text(json.dumps(data, indent=2))
+        except Exception as err:
+            self.updateErrorText(f'template save error: {err}')
+
+    def _load_templates_dir(self) -> None:
+        """Scan the templates directory and load every JSON file on startup."""
+        import json
+        import plotly.graph_objects as go
+        for fpath in sorted(self._templates_dir.glob('*.json')):
+            try:
+                data = json.loads(fpath.read_text())
+                name = data.get('name', fpath.stem)
+                tmpl_dict = data.get('template', {})
+                tmpl = go.layout.Template(
+                    layout=go.Layout(**tmpl_dict.get('layout', {})))
+                self._templates[name] = {
+                    'template': tmpl,
+                    **{k: v for k, v in data.items() if k not in ('template', 'name')},
+                }
+            except Exception as err:
+                self.updateErrorText(f'template load error ({fpath.name}): {err}')
+        if self._templates:
+            self.figTemplateList.options = list(self._templates.keys())
+
+    def _save_as_template(self, _=None) -> None:
+        """Capture current Figure Settings as a named template entry."""
+        import plotly.graph_objects as go
+        name = self.figTemplateName.value.strip()
+        if not name:
+            self.updateErrorText('Enter a template name before saving')
+            return
+        ticks     = self.figTicksMode.value
+        show_grid = self.figGridToggle.value
+        show_line = self.figAxesBorderToggle.value
+        nticks_x  = self._parse_tick_count(self.figXTickCount.value)
+        nticks_y  = self._parse_tick_count(self.figYTickCount.value)
+        axis_layout = dict(
+            title_font=dict(size=self.figAxesLabelSize.value,
+                            color=self.figAxesLabelColor.value),
+            tickfont=dict(size=self.figTickSize.value, color=self.figTickColor.value),
+            ticks=ticks, showgrid=show_grid,
+            showline=show_line, linewidth=1, linecolor='black', mirror=show_line,
+        )
+        plotly_tmpl = go.layout.Template(layout=go.Layout(
+            font=dict(family=self.figFontFamily.value),
+            title=dict(font=dict(size=self.figTitleSize.value,
+                                 color=self.figTitleColor.value)),
+            legend=dict(font=dict(size=self.figLegendSize.value,
+                                  color=self.figLegendColor.value)),
+            paper_bgcolor=self.figBgColor.value,
+            plot_bgcolor=self.figBgColor.value,
+            xaxis=dict(**axis_layout, nticks=nticks_x),
+            yaxis=dict(**axis_layout, nticks=nticks_y),
+            width=self.figWidth.value, height=self.figHeight.value,
+        ))
+        self._templates[name] = {'template': plotly_tmpl, **self._template_extra_save()}
+        self.figTemplateList.options = list(self._templates.keys())
+        self.figTemplateName.value   = ''
+        self._save_template_file(name)
+
+    def _apply_selected_template(self, _=None) -> None:
+        """Apply the selected template to the live figure and sync size widgets."""
+        name = self.figTemplateList.value
+        if not name or name not in self._templates:
+            return
+        entry = self._templates[name]
+        tmpl  = entry['template']
+        self.figure.update_layout(template=tmpl)
+        w = tmpl.layout.width
+        h = tmpl.layout.height
+        if w:
+            self.figWidth.value = w
+        if h:
+            self.figHeight.value = h
+        self._template_extra_apply(entry)
+
+    def _connect_figure_settings_observers(self) -> None:
+        """Wire the Apply Settings, Save Template, and Apply Template buttons."""
         self.figFontApplyBtn.on_click(self._apply_figure_layout)
+        self.figSaveTemplateBtn.on_click(self._save_as_template)
+        self.figApplyTemplateBtn.on_click(self._apply_selected_template)
+        # Auto-apply 'default' template if it was loaded from disk
+        if 'default' in self._templates:
+            self.figTemplateList.value = 'default'
+            self._apply_selected_template()
+
+    # keep old name as alias
+    def _connect_font_observers(self) -> None:
+        self._connect_figure_settings_observers()
 
     def _refresh_info(self, *_) -> None:
         """Tier-2 observer: rebuild title/info text then redraw. No data reprocessing."""
@@ -242,7 +423,11 @@ class BaseBrowser:
             stem += f'_{self.saveNote.value}'
         self.last_save_fname = str(out_dir / f'{stem}.png')
         try:
-            self._last_img_bytes = self.figure.to_image(format='png', scale=5)
+            import plotly.graph_objects as go
+            fig_export = go.Figure(self.figure)
+            fig_export.update_layout(paper_bgcolor='rgba(0,0,0,0)',
+                                     plot_bgcolor='rgba(0,0,0,0)')
+            self._last_img_bytes = fig_export.to_image(format='png', scale=5)
             Path(self.last_save_fname).write_bytes(self._last_img_bytes)
             self.updateErrorText('Figure Saved')
         except Exception as err:
@@ -258,6 +443,29 @@ class BaseBrowser:
         """Append *text* to the error log and refresh the output widget."""
         self.errors.append(f'{len(self.errors)} {text}')
         self.errorText.options = self.errors
+
+    @staticmethod
+    def _status_html(busy: bool, msg: str = 'Processing...') -> str:
+        """HTML for the status dot shown in the session row."""
+        if busy:
+            return (f'<span style="font-size:11px;font-family:sans-serif;'
+                    f'white-space:nowrap;color:#e67e22;">&#9679; {msg}</span>')
+        return ('<span style="font-size:11px;font-family:sans-serif;'
+                'white-space:nowrap;color:#27ae60;">&#9679; Ready</span>')
+
+    def _set_busy(self, busy: bool, msg: str = 'Processing...') -> None:
+        """Increment/decrement busy counter; update status widget at 0/1 transitions.
+
+        Using a counter means nested calls (handler -> _redraw) clear correctly:
+        the indicator stays orange until the outermost caller finishes.
+        """
+        if busy:
+            self._busy_count += 1
+            self._status_widget.value = self._status_html(True, msg)
+        else:
+            self._busy_count = max(0, self._busy_count - 1)
+            if self._busy_count == 0:
+                self._status_widget.value = self._status_html(False)
 
     # ------------------------------------------------------------------
     # Directory discovery
@@ -349,20 +557,14 @@ class BaseBrowser:
             # ------------------------------------------------------------------
             try:
                 import win32clipboard
-                from PIL import Image
 
-                img = Image.open(buf).convert('RGB')
-                # Downsample to a screen-friendly size before DIB conversion
-                img.thumbnail((2400, 2400), Image.LANCZOS)
-                dib_buf = io.BytesIO()
-                img.save(dib_buf, 'BMP')
-                # Strip the 14-byte BMP file header to obtain a raw DIB block
-                dib_data = dib_buf.getvalue()[14:]
-
+                # Use the PNG clipboard format — preserves the alpha channel
+                # and is understood by Word, PowerPoint, Illustrator, etc.
+                fmt_png = win32clipboard.RegisterClipboardFormat('PNG')
                 win32clipboard.OpenClipboard()
                 try:
                     win32clipboard.EmptyClipboard()
-                    win32clipboard.SetClipboardData(win32clipboard.CF_DIB, dib_data)
+                    win32clipboard.SetClipboardData(fmt_png, self._last_img_bytes)
                 finally:
                     win32clipboard.CloseClipboard()
 
@@ -422,26 +624,50 @@ class BaseBrowser:
                 pass  # selection may no longer be in the list after a root change
 
     # ------------------------------------------------------------------
+    # Notebook cell injection
+    # ------------------------------------------------------------------
+
+    def _inject_cell(self, code: str) -> None:
+        """Insert code as a new Jupyter cell directly below the current one.
+
+        JupyterLab/Notebook 7: insert-cell-below then replace-selection.
+        Classic Notebook: Jupyter.notebook API fallback.
+        json.dumps handles all escaping regardless of quotes or newlines.
+        """
+        import json
+        from IPython.display import display, Javascript
+        code_json = json.dumps(code)
+        js = (
+            "(function() {"
+            "  var code = " + code_json + ";"
+            "  var app = window.jupyterapp || window.jupyterlab;"
+            "  if (app && app.commands) {"
+            "    app.commands.execute('notebook:insert-cell-below').then(function() {"
+            "      app.commands.execute('notebook:replace-selection', { text: code });"
+            "    });"
+            "    return;"
+            "  }"
+            "  if (window.Jupyter && window.Jupyter.notebook) {"
+            "    var nb = window.Jupyter.notebook;"
+            "    var cell = nb.insert_cell_below('code');"
+            "    cell.set_text(code);"
+            "    cell.select();"
+            "  }"
+            "})();"
+        )
+        display(Javascript(js))
+
+    # ------------------------------------------------------------------
     # Settings panel visibility
     # ------------------------------------------------------------------
 
     def _set_settings_visibility(self, visible: bool) -> None:
-        """
-        Show or hide ``v_settings_layout`` and all of its children.
-
-        Uses duck-typing (``hasattr(child, 'children')``) so this method
-        works without importing ipywidgets directly.
-
-        Parameters
-        ----------
-        visible : bool
-            ``True`` → visibility = 'visible',  ``False`` → 'hidden'
-        """
-        vis = 'visible' if visible else 'hidden'
-        self.v_settings_layout.layout.visibility = vis
+        """Show or hide the settings accordion and all its descendant widgets."""
+        import ipywidgets as widgets
+        target = 'visible' if visible else 'hidden'
+        self.v_settings_layout.layout.visibility = target
         for child in self.v_settings_layout.children:
-            # Recursively show/hide nested containers (e.g. HBox inside Accordion)
+            child.layout.visibility = target
             if hasattr(child, 'children'):
                 for grandchild in child.children:
-                    grandchild.layout.visibility = vis
-            child.layout.visibility = vis
+                    grandchild.layout.visibility = target

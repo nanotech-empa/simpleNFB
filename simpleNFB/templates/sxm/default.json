@@ -1,0 +1,73 @@
+{
+  "name": "default",
+  "template": {
+    "layout": {
+      "font": {
+        "family": "Arial"
+      },
+      "height": 600,
+      "legend": {
+        "font": {
+          "color": "black",
+          "size": 11
+        }
+      },
+      "paper_bgcolor": "white",
+      "plot_bgcolor": "white",
+      "title": {
+        "font": {
+          "color": "black",
+          "size": 14
+        }
+      },
+      "width": 600,
+      "xaxis": {
+        "linecolor": "black",
+        "linewidth": 1,
+        "mirror": true,
+        "nticks": 0,
+        "showgrid": false,
+        "showline": true,
+        "tickfont": {
+          "color": "black",
+          "size": 10
+        },
+        "ticks": "outside",
+        "title": {
+          "font": {
+            "color": "black",
+            "size": 12
+          }
+        }
+      },
+      "yaxis": {
+        "linecolor": "black",
+        "linewidth": 1,
+        "mirror": true,
+        "nticks": 0,
+        "showgrid": false,
+        "showline": true,
+        "tickfont": {
+          "color": "black",
+          "size": 10
+        },
+        "ticks": "outside",
+        "title": {
+          "font": {
+            "color": "black",
+            "size": 12
+          }
+        }
+      }
+    }
+  },
+  "labels": {
+    "show": true,
+    "upper_left": "bias",
+    "upper_right": "filename",
+    "lower_left": "none",
+    "lower_right": "scalebar",
+    "color": "#ffffff",
+    "font_size": 24
+  }
+}

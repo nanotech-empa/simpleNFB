@@ -37,6 +37,8 @@ class fileBrowser(BaseBrowser):
         save_figure(a)      – save to browser_outputs/
     '''
 
+    _TEMPLATES_SUBDIR: str = 'sxm'
+
     _ALIGN_PARAMS: dict = {
         'upper left':  ('left',  'top'),
         'upper right': ('right', 'top'),
@@ -44,8 +46,9 @@ class fileBrowser(BaseBrowser):
         'lower right': ('right', 'bottom'),
     }
 
-    def __init__(self, figsize=(6, 6), fontsize: int = 12, titlesize: int = 12,
-                 cmap: str = 'greys', home_directory: str = './') -> None:
+    def __init__(self, width: int = 600, height: int = 500, fontsize: int = 12,
+                 titlesize: int = 12, cmap: str = 'greys',
+                 home_directory: str = './') -> None:
         # Normalise cmap: strip matplotlib _r suffix → reversescale toggle
         _cmap_lower = cmap.lower()
         _reversed   = _cmap_lower.endswith('_r')
@@ -58,14 +61,16 @@ class fileBrowser(BaseBrowser):
         self.figure = go.FigureWidget(data=[go.Heatmap(
             z=[[0]], colorscale=self._cmap, reversescale=_reversed,
             colorbar=dict(thickness=12, len=0.9))])
-        self.figure.update_layout(
+        self.figure.update_layout(autosize=True,
             margin=dict(l=60, r=60, t=80, b=60),
-            autosize=True, height=450,
+            height=height,
             xaxis=dict(scaleanchor='y'),
-            paper_bgcolor="rgb(0,0,0,0)",
+            paper_bgcolor='white',
         )
         self._apply_font_defaults()
-        self._setup_figure_autosize()
+        self._fig_width, self._fig_height = width, height
+        self._img_aspect = 1.0          # updated on every update_axes call
+        self._setup_figure_autosize(width, height)
         self.fontsize  = fontsize
         self.titlesize = titlesize
         self.image_data = np.zeros((64, 64))
@@ -160,7 +165,7 @@ class fileBrowser(BaseBrowser):
 
         # settings panel — visibility toggles
         self.configOptionBtn = widgets.ToggleButton(
-            description='', icon='gear', value=False,
+            description='', icon='gear', value=True,
             tooltip='Display options panel', layout=FLB(24))
         self.titleToggle = widgets.ToggleButton(
             value=True,  description='Show Title',  tooltip='Toggle figure title',  layout=FLH(98))
@@ -205,25 +210,24 @@ class fileBrowser(BaseBrowser):
             description='size:', value=9,
             style={'description_width': '40px'}, layout=FL(98))
 
-        self.filterLabel    = widgets.Label(value='Image Filter Settings', layout=FLH(98))
-        self.gaussianToggle = widgets.ToggleButton(value=False, description='Gaussian', layout=FLH(60))
+        self.filterLabel    = widgets.Label(value='Image Filter Settings', layout=FL(98))
+        self.gaussianToggle = widgets.ToggleButton(value=False, description='Gaussian', layout=FL(60))
         self.gaussianSize   = widgets.BoundedIntText(
-            value=2, min=0, max=10, step=1, tooltip='Gaussian kernel size', layout=FLH(40))
-        self.medianToggle   = widgets.ToggleButton(value=False, description='Median',   layout=FLH(60))
+            value=2, min=0, max=10, step=1, tooltip='Gaussian kernel size', layout=FL(40))
+        self.medianToggle   = widgets.ToggleButton(value=False, description='Median',   layout=FL(60))
         self.medianSize     = widgets.BoundedIntText(
-            value=3, min=1, max=20, step=1, tooltip='Median kernel size',   layout=FLH(40))
-        self.laplacToggle   = widgets.ToggleButton(value=False, description='Laplace',  layout=FLH(60))
+            value=3, min=1, max=20, step=1, tooltip='Median kernel size',   layout=FL(40))
+        self.laplacToggle   = widgets.ToggleButton(value=False, description='Laplace',  layout=FL(60))
         self.laplaceSize    = widgets.BoundedIntText(
-            value=1, min=1, max=10, step=1, tooltip='Laplace kernel size',  layout=FLH(40))
-        self._build_font_widgets()
+            value=1, min=1, max=10, step=1, tooltip='Laplace kernel size',  layout=FL(40))
+        self._build_figure_settings_widgets(self._fig_width, self._fig_height)
 
     def _build_layout(self) -> None:
         """Assemble widgets into HBox/VBox containers."""
         _, FL, FLB, FLH = self._layout_helpers()
 
         self.h_process_btn_layout = HBox(children=[
-            self.directionBtn, self.fixZeroBtn, self.linebylineBtn,
-            self.flattenBtn, self.invertBtn])
+            self.directionBtn, self.invertBtn])
         self.h_channel_layout = HBox(children=[
             widgets.Label('Channel'), self.channelSelect])
         self.v_color_layout = VBox(children=[
@@ -259,14 +263,21 @@ class fileBrowser(BaseBrowser):
                 self.titleFontSize,
             ], layout=FLH(98)),
             VBox(children=[
-                self.filterLabel,
-                HBox(children=[self.gaussianToggle, self.gaussianSize], layout=FLH(98)),
-                HBox(children=[self.medianToggle,   self.medianSize],   layout=FLH(98)),
-                HBox(children=[self.laplacToggle,   self.laplaceSize],  layout=FLH(98)),
-            ], layout=FLH(98)),
-            self._font_settings_tab(),
+                widgets.Label('── Corrections ──', layout=FL(98)),
+                HBox(children=[self.linebylineBtn,
+                               widgets.Label('Line-by-line subtraction')], layout=FL(98)),
+                HBox(children=[self.flattenBtn,
+                               widgets.Label('Plane fit')],               layout=FL(98)),
+                HBox(children=[self.fixZeroBtn,
+                               widgets.Label('Set zero')],                layout=FL(98)),
+                widgets.Label('── Filters ──', layout=FL(98)),
+                HBox(children=[self.gaussianToggle, self.gaussianSize],   layout=FL(98)),
+                HBox(children=[self.medianToggle,   self.medianSize],     layout=FL(98)),
+                HBox(children=[self.laplacToggle,   self.laplaceSize],    layout=FL(98)),
+            ], layout=FL(98)),
+            self._figure_settings_tab(),
         ], layout=FLH(10),
-        titles=['Label Settings', 'Title Settings', 'Filter Settings', 'Font Settings'])
+        titles=['Label Settings', 'Title Settings', 'Filter Settings', 'Figure Settings'])
         # FigureWidget is itself a widget — no Output wrapper needed
         self.v_image_layout = VBox(
             children=[self.figure, self.h_user_layout], layout=FLB(70))
@@ -275,7 +286,7 @@ class fileBrowser(BaseBrowser):
     def _connect_observers(self) -> None:
         """Wire all observe() and on_click() callbacks."""
         # Tier 1 — layout update only (colormap, labels, fonts; no data reprocessing)
-        for w in (self.titleToggle, self.labelToggle,
+        for w in (self.labelToggle,
                   self.upperLeftSelect, self.upperRightSelect,
                   self.lowerLeftSelect, self.lowerRightSelect,
                   self.labelColorSelect, self.labelFontSize, self.titleFontSize,
@@ -283,8 +294,9 @@ class fileBrowser(BaseBrowser):
             w.observe(self._redraw, names='value')
 
         # Tier 2 — rebuild title text then redraw (no filter pipeline)
-        for w in (self.channelToggle, self.setpointToggle, self.feedbackToggle,
-                  self.locationToggle, self.depthSelection,
+        # titleToggle lives here so update_scan_info runs before update_axes reads scan_info
+        for w in (self.titleToggle, self.channelToggle, self.setpointToggle,
+                  self.feedbackToggle, self.locationToggle, self.depthSelection,
                   self.nameToggle, self.directionToggle, self.dateToggle):
             w.observe(self._refresh_info, names='value')
 
@@ -296,7 +308,7 @@ class fileBrowser(BaseBrowser):
                   self.invertBtn, self.fixZeroBtn):
             w.observe(self.redraw_image, names='value')
 
-        self._connect_font_observers()
+        self._connect_figure_settings_observers()
         self.saveBtn.on_click(self.save_figure)
         self.copyBtn.on_click(self.copy_figure)
         self.configOptionBtn.observe(self.handler_configOptionsDisplay, names='value')
@@ -319,12 +331,17 @@ class fileBrowser(BaseBrowser):
 
     def display(self) -> None:
         """Render the browser widget."""
+        self._set_settings_visibility(True)
         display.clear_output(wait=True)
         display.display(self.h_main_layout)
 
     def _redraw(self, *_) -> None:
         """Update axes; FigureWidget updates reactively — no canvas.draw() needed."""
-        self.update_axes()
+        self._set_busy(True, 'Rendering...')
+        try:
+            self.update_axes()
+        finally:
+            self._set_busy(False)
 
     def _on_limits_change(self, _) -> None:
         """Callback for vmin/vmax changes; skipped during batch limit updates."""
@@ -497,8 +514,6 @@ class fileBrowser(BaseBrowser):
             )
             show_axes = not self.labelToggle.value
             self.figure.update_layout(
-                title=dict(text=self.scan_info,
-                           font=dict(size=self.titleFontSize.value), x=0),
                 xaxis=dict(title='x (nm)', tickvals=[0, w_crop],
                            ticktext=['0', f'{w_crop:.2f}'],
                            visible=show_axes, scaleanchor='y'),
@@ -507,6 +522,12 @@ class fileBrowser(BaseBrowser):
                            visible=show_axes),
                 annotations=[], shapes=[],
             )
+        self._apply_figure_title()
+        self._img_aspect = h_crop / w_crop if w_crop else 1.0
+        self.figure.update_layout(
+            autosize=True,
+            height=round(self.figHeight.value * self._img_aspect),
+        )
 
         if self.labelToggle.value:
             self._add_figure_labels(w_crop, h_crop)
@@ -584,6 +605,24 @@ class fileBrowser(BaseBrowser):
     # Navigation
     # ------------------------------------------------------------------
 
+    def _apply_figure_layout(self, _=None) -> None:
+        """Override: apply Figure Settings with height scaled by image aspect ratio."""
+        super()._apply_figure_layout(_)
+        if getattr(self, '_img_aspect', None):
+            self.figure.update_layout(
+                autosize=True,
+                height=round(self.figHeight.value * self._img_aspect),
+            )
+
+    def _apply_figure_title(self) -> None:
+        """Set figure title text, font and top margin from current scan_info."""
+        n_lines = (self.scan_info.count('<br>') + 1) if self.scan_info else 0
+        t_margin = max(80, int(n_lines * self.titleFontSize.value * 2.5) + 40)
+        self.figure.update_layout(
+            title=dict(text=self.scan_info, font=dict(size=self.figTitleSize.value), x=0,y=0.9,yref='container',xref='paper',yanchor='bottom',automargin=True),)
+            #margin=dict(t=t_margin),
+        
+
     def _update_channel_selection(self) -> None:
         current = self.channelSelect.value
         self.channelSelect.options = self.img.channels
@@ -631,49 +670,94 @@ class fileBrowser(BaseBrowser):
     # Handlers
     # ------------------------------------------------------------------
 
+    def get_plot_data(self):
+        """Return the processed image array currently displayed in the figure."""
+        return self.image_data.copy()
+
     def handler_configOptionsDisplay(self, a) -> None:
         self._set_settings_visibility(self.configOptionBtn.value)
         if self.configOptionBtn.value:
             self.depthSelection.layout.visibility = 'visible'
 
     def handler_folder_selection(self, a) -> None:
-        index = 0
-        if type(a) == type(self.refreshBtn):
-            index = self.selectionList.index
-        directory = self.directories[self.directorySelection.index]
-        self.sxm_files, self.dat_files = [], []
-        for entry in os.listdir(directory):
-            if '.sxm' in entry:
-                self.sxm_files.append(entry)
-            elif '.dat' in entry:
-                self.dat_files.append(entry)
-        self.all_files = self.sxm_files + self.dat_files
-        self.sxm_files = list(np.flip(self.sxm_files))
-        # suppress handler_file_selection while syncing list widget state
-        self._loading = True
-        self.selectionList.options = self.sxm_files
-        if self.sxm_files:
-            self.filenameText.value = self.sxm_files[index]
-            self.selectionList.value = self.sxm_files[index]
-        self._loading = False
-        if self.sxm_files:
-            self.image_index = index
-            try:
-                self.load_new_image()
-                self._redraw()
-            except Exception as err:
-                self.updateErrorText('folder selection error: ' + str(err))
+        self._set_busy(True, 'Scanning folder...')
+        try:
+            index = 0
+            if type(a) == type(self.refreshBtn):
+                index = self.selectionList.index
+            directory = self.directories[self.directorySelection.index]
+            self.sxm_files, self.dat_files = [], []
+            for entry in os.listdir(directory):
+                if '.sxm' in entry:
+                    self.sxm_files.append(entry)
+                elif '.dat' in entry:
+                    self.dat_files.append(entry)
+            self.all_files = self.sxm_files + self.dat_files
+            self.sxm_files = list(np.flip(self.sxm_files))
+            # suppress handler_file_selection while syncing list widget state
+            self._loading = True
+            self.selectionList.options = self.sxm_files
+            if self.sxm_files:
+                self.filenameText.value = self.sxm_files[index]
+                self.selectionList.value = self.sxm_files[index]
+            self._loading = False
+            if self.sxm_files:
+                self.image_index = index
+                try:
+                    self.load_new_image()
+                    self._redraw()
+                except Exception as err:
+                    self.updateErrorText('folder selection error: ' + str(err))
+        finally:
+            self._set_busy(False)
 
     def handler_file_selection(self, update) -> None:
         if self._loading or self.selectionList.value is None:
             return
-        self.image_index = self.sxm_files.index(self.selectionList.value)
+        self._set_busy(True, 'Loading image...')
         try:
+            self.image_index = self.sxm_files.index(self.selectionList.value)
             self.load_new_image()
             self._redraw()
         except Exception as err:
             self.updateErrorText('file selection error: ' + str(err))
             print(traceback.format_exc())
+        finally:
+            self._set_busy(False)
+
+
+    def _template_extra_save(self) -> dict:
+        """Capture SXM label settings alongside the plotly template."""
+        return {
+            'labels': {
+                'show':        self.labelToggle.value,
+                'upper_left':  self.upperLeftSelect.value,
+                'upper_right': self.upperRightSelect.value,
+                'lower_left':  self.lowerLeftSelect.value,
+                'lower_right': self.lowerRightSelect.value,
+                'color':       self.labelColorSelect.value,
+                'font_size':   self.labelFontSize.value,
+            }
+        }
+
+    def _template_extra_apply(self, entry: dict) -> None:
+        """Restore SXM label settings from a saved template entry."""
+        labels = entry.get('labels')
+        if not labels:
+            return
+        self._loading = True
+        try:
+            self.labelToggle.value      = labels['show']
+            self.upperLeftSelect.value  = labels['upper_left']
+            self.upperRightSelect.value = labels['upper_right']
+            self.lowerLeftSelect.value  = labels['lower_left']
+            self.lowerRightSelect.value = labels['lower_right']
+            self.labelColorSelect.value = labels['color']
+            self.labelFontSize.value    = labels['font_size']
+        except Exception:
+            pass
+        finally:
+            self._loading = False
 
     def handler_channel_selection(self, update) -> None:
         if self._loading:
