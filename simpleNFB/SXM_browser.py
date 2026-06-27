@@ -59,18 +59,17 @@ class fileBrowser(BaseBrowser):
         # --- state ---
         self.img = None
         self.figure = go.FigureWidget(data=[go.Heatmap(
-            z=[[0]], colorscale=self._cmap, reversescale=_reversed,
-            colorbar=dict(thickness=12, len=0.9))])
-        self.figure.update_layout(autosize=True,
+            z=[[0]], colorscale=self._cmap, reversescale=_reversed)])
+        self.figure.update_layout(
+            autosize=False,
+            width=width,
             margin=dict(l=60, r=60, t=80, b=60),
             height=height,
-            xaxis=dict(scaleanchor='y'),
             paper_bgcolor='white',
         )
         self._apply_font_defaults()
         self._fig_width, self._fig_height = width, height
-        self._img_aspect = 1.0          # updated on every update_axes call
-        self._setup_figure_autosize(width, height)
+        self._last_crop = (1.0, 1.0)  # (h_crop, w_crop) stored for _apply_figure_layout
         self.fontsize  = fontsize
         self.titlesize = titlesize
         self.image_data = np.zeros((64, 64))
@@ -506,31 +505,52 @@ class fileBrowser(BaseBrowser):
             hm.zmax       = vmax
             hm.colorscale = self._resolve_colorscale(self.cmapSelection.value)
             hm.reversescale = self.reverseScaleToggle.value
-            hm.colorbar   = dict(
+            hm.colorbar = dict(
                 title=dict(text=f'{channel} ({unit})', side='right'),
-                thickness=12, len=0.9,
+                thickness=12,
+                len=1.0, lenmode='fraction',
+                y=0.5, yanchor='middle',
                 tickvals=[vmin, vmax],
                 ticktext=[f'{vmin:.2f}', f'{vmax:.2f}'],
             )
+            self._last_crop = (h_crop, w_crop)
             show_axes = not self.labelToggle.value
             self.figure.update_layout(
                 xaxis=dict(title='x (nm)', tickvals=[0, w_crop],
                            ticktext=['0', f'{w_crop:.2f}'],
-                           visible=show_axes, scaleanchor='y'),
+                           visible=show_axes),
                 yaxis=dict(title='y (nm)', tickvals=[0, h_crop],
                            ticktext=['0', f'{h_crop:.2f}'],
                            visible=show_axes),
                 annotations=[], shapes=[],
             )
-        self._apply_figure_title()
-        self._img_aspect = h_crop / w_crop if w_crop else 1.0
-        self.figure.update_layout(
-            autosize=True,
-            height=round(self.figHeight.value * self._img_aspect),
-        )
 
+        self._update_fig_width(h_crop, w_crop)
+        self._apply_figure_title()
         if self.labelToggle.value:
             self._add_figure_labels(w_crop, h_crop)
+
+    # ------------------------------------------------------------------
+
+    def _update_fig_width(self, h_crop: float, w_crop: float) -> None:
+        """Set figure width so the plot area matches the image aspect ratio.
+        With a correctly shaped plot area the image fills it entirely, so the
+        default colorbar position (x=1.02 paper) lands immediately to the right
+        of the image with no manual offset calculation required.
+        """
+        if h_crop <= 0 or w_crop <= 0:
+            return
+        plot_h = max(1, self.figHeight.value - 80 - 60)   # t=80, b=60 margins
+        plot_w = max(1, int(plot_h * w_crop / h_crop))
+        self.figure.update_layout(autosize=False,
+                                  width=60 + plot_w + 60,
+                                  height=self.figHeight.value)
+
+    def _apply_figure_layout(self, _=None) -> None:
+        """Apply figure settings and recompute width from the stored image crop."""
+        super()._apply_figure_layout(_)
+        h_crop, w_crop = self._last_crop
+        self._update_fig_width(h_crop, w_crop)
 
     def _add_figure_labels(self, w: float, h: float) -> None:
         """Overlay corner text / scalebar annotations via plotly paper-coords."""
@@ -582,18 +602,18 @@ class fileBrowser(BaseBrowser):
 
                 shapes.append(dict(
                     type='line', x0=bar_x0, x1=bar_x1, y0=bar_y, y1=bar_y,
-                    xref='paper', yref='paper',
+                    xref='x domain', yref='y domain',
                     line=dict(color=color, width=3)))
                 annotations.append(dict(
                     x=(bar_x0 + bar_x1) / 2, y=lbl_y, text=label,
-                    xref='paper', yref='paper',
+                    xref='x domain', yref='y domain',
                     xanchor='center', yanchor='bottom', showarrow=False,
                     font=dict(size=fs, color=color)))
                 continue
 
             annotations.append(dict(
                 x=xf, y=yf, text=text_map.get(selection, ''),
-                xref='paper', yref='paper',
+                xref='x domain', yref='y domain',
                 xanchor=xanchor, yanchor=yanchor,
                 showarrow=False, font=dict(size=fs, color=color)))
 
@@ -605,21 +625,12 @@ class fileBrowser(BaseBrowser):
     # Navigation
     # ------------------------------------------------------------------
 
-    def _apply_figure_layout(self, _=None) -> None:
-        """Override: apply Figure Settings with height scaled by image aspect ratio."""
-        super()._apply_figure_layout(_)
-        if getattr(self, '_img_aspect', None):
-            self.figure.update_layout(
-                autosize=True,
-                height=round(self.figHeight.value * self._img_aspect),
-            )
-
     def _apply_figure_title(self) -> None:
         """Set figure title text, font and top margin from current scan_info."""
         n_lines = (self.scan_info.count('<br>') + 1) if self.scan_info else 0
         t_margin = max(80, int(n_lines * self.titleFontSize.value * 2.5) + 40)
         self.figure.update_layout(
-            title=dict(text=self.scan_info, font=dict(size=self.figTitleSize.value), x=0,y=0.9,yref='container',xref='paper',yanchor='bottom',automargin=True),)
+            title=dict(text=self.scan_info, font=dict(size=self.figTitleSize.value), x=0,y=0.9,yref='container',xref='paper',xanchor='left',yanchor='bottom',automargin=True),)
             #margin=dict(t=t_margin),
         
 
@@ -769,5 +780,4 @@ class fileBrowser(BaseBrowser):
             self.updateErrorText('channel selection error: ' + str(err))
 
 
-# Backward-compatible alias so __init__.py can `from .SXM_browser import imageBrowser`
-imageBrowser = fileBrowser
+# Backward-compatible alias so __init__.py can `from .S

@@ -12,12 +12,13 @@ requires-python = ">=3.9"
 dependencies = [
     "ipywidgets>=8.0",
     "plotly>=5.18",
-    "anywidget",
     "kaleido>=0.2",
     "numpy>=1.23",
     "scipy>=1.9",
-    "Pillow>=9.0",
+    "pyyaml>=6.0",
     "spmpy @ git+https://github.com/nanotech-empa/spmpy.git",
+    # spmpy declares its own deps (nanonispy, SPIEPy, matplotlib, numpy);
+    # pip resolves and installs them transitively via the flit_core build.
 ]
 
 [project.optional-dependencies]

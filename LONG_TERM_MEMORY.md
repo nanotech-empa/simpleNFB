@@ -109,6 +109,15 @@ Stripped all bare absolute imports and `importlib.reload` calls. Now a two-line 
 
 ---
 
+## 2026-06-27 — SXM_browser colorbar simplification
+
+### SXM_browser.py
+- Removed: `_colorbar_params`, `_reposition_colorbar`, `_on_figure_relayout`, `_rendered_fig_w`, `scaleanchor`/`constrain` axis attrs
+- Root insight: with `scaleanchor + constrain='domain'` the image doesn't fill the full plot area, so computing the image's position in paper coords (and tracking rendered width via JS relayout) was required. Eliminated by shaping the figure correctly instead.
+- New approach: `autosize=False`; `_update_fig_width(h_crop, w_crop)` computes `width = 60 + plot_h*(w_crop/h_crop) + 60` from the known `figHeight.value`. Plot area aspect matches image → image fills plot area entirely → default colorbar `x=1.02` and `len=1.0` are correct with no geometry calculation.
+- Added `_apply_figure_layout` override: calls `super()` then reapplies `autosize=False, width=...` (base sets `autosize=True` which is overridden).
+- Colorbar now uses `len=1.0, y=0.5, yanchor='middle'`; no `x` override needed.
+
 ## 2026-06-26 — SXM_browser Filter Settings panel expansion
 
 ### SXM_browser.py

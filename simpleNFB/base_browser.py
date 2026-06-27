@@ -534,9 +534,8 @@ class BaseBrowser:
 
         Two clipboard strategies are attempted in order:
 
-        1. **win32clipboard** (primary) — converts the cached PNG bytes to a DIB
-           bitmap and writes directly to the clipboard.  Requires ``pywin32``
-           and ``Pillow``.
+        1. **win32clipboard** (primary) — writes the PNG bytes directly to the
+           clipboard using the registered PNG format.  Requires ``pywin32``.
 
         2. **PowerShell fallback** — calls ``Set-Clipboard -Path`` on the file
            written by ``save_figure``.  10-second timeout; non-zero exit code

@@ -1,5 +1,5 @@
-from .SXM_browser import imageBrowser
-from .DAT_browser import spectrumBrowser
+from .SXM_browser import fileBrowser as sxmBrowser
+from .DAT_browser import fileBrowser as datBrowser
 from .process_utils import (
     rebin_intensity_nm_to_ev,
     smooth_data,
@@ -11,8 +11,8 @@ from .process_utils import (
 )
 
 __all__ = [
-    "imageBrowser",
-    "spectrumBrowser",
+    "sxmBrowser",
+    "datBrowser",
     "rebin_intensity_nm_to_ev",
     "smooth_data",
     "group_average",
