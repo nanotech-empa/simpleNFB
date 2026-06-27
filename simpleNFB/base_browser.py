@@ -94,34 +94,97 @@ class BaseBrowser:
         self.errorText    = Selection_Widget([], 'Out:', rows=5)
 
     def _build_main_layout(self, file_col, img_col, session_label_width: int = 5) -> None:
-        """Assemble the top-level 3-column layout and set it as self.h_main_layout."""
+        """Assemble the top-level 3-column layout and set it as self.h_main_layout.
+
+        Layout strategy (ipywidgets flex):
+          file_col        — flex: '0 0 auto', fixed 250 px; wide enough for typical paths
+          img_col         — flex: '1 1 auto'; expands to fill all remaining space
+          v_settings_layout — flex: '0 0 auto', fixed 310 px; wide enough for all tab widgets
+        """
         import ipywidgets as widgets
         from .widget_helpers import HBox, VBox
-        _, FL, _, _ = self._layout_helpers()
 
         self._status_widget = widgets.HTML(
             value=self._status_html(False),
             layout=widgets.Layout(flex='0 0 auto', margin='0 0 0 8px'),
         )
+
+        # File column: fixed width, does not grow or shrink
+        file_col.layout.flex      = '0 0 auto'
+        file_col.layout.width     = '250px'
+        file_col.layout.min_width = '200px'
+
+        # Image column: fills all space left after the two fixed-width side panels
+        img_col.layout.flex      = '1 1 auto'
+        img_col.layout.width     = 'auto'
+        img_col.layout.min_width = '300px'
+
+        # Settings panel: fixed width, does not grow or shrink
+        self.v_settings_layout.layout.flex      = '0 0 auto'
+        self.v_settings_layout.layout.width     = '310px'
+        self.v_settings_layout.layout.min_width = '280px'
+
+        _row = widgets.Layout(display='flex', flex_flow='row',
+                              width='100%', align_items='stretch')
         self.h_main_layout = VBox(children=[
             HBox(children=[
                 widgets.Label('Session', layout=widgets.Layout(
-                    display='flex', justify_content='flex-start',
-                    width=f'{session_label_width}%')),
+                    flex='0 0 auto', width=f'{session_label_width}%')),
                 self.rootFolder,
-                self._status_widget], layout=FL(99)),
-            HBox(children=[file_col, img_col, self.v_settings_layout], layout=FL(99))],
-            layout=FL(100))
-        self.v_settings_layout.layout.min_width = '300px'
-        file_col.layout.min_width = '200px'
+                self._status_widget],
+                layout=widgets.Layout(display='flex', flex_flow='row',
+                                      width='100%', align_items='center')),
+            HBox(children=[file_col, img_col, self.v_settings_layout], layout=_row)],
+            layout=widgets.Layout(display='flex', flex_flow='column', width='100%',justify_content='space-between',align_items='stretch'),)
 
     # ------------------------------------------------------------------
     # Figure defaults and utilities
     # ------------------------------------------------------------------
 
-    def _apply_font_defaults(self) -> None:
-        """Set global figure font to Arial with black text."""
-        self.figure.update_layout(font=dict(family='Arial', color='black'))
+    def _figure_layout_update(
+        self,
+        *,
+        margin: dict,
+        autosize: bool = True,
+        width: int | None = None,
+        height: int | None = None,
+    ) -> None:
+        """Apply all figure appearance settings in one atomic call.
+
+        Invoked at startup (once widgets exist) and by the 'Apply Settings' button.
+        Browser subclasses supply their fixed structural values; the remaining
+        parameters are read from the Figure Settings widgets.
+
+        Parameters
+        ----------
+        margin   : l/r/t/b pixel margins — differs per browser.
+        autosize : True  → fill HTML container (DAT, default).
+                   False → explicit pixel dimensions (SXM).
+        width    : pixel width; applied only when autosize=False.
+        height   : pixel height; defaults to figHeight.value.
+        """
+        h         = height if height is not None else self.figHeight.value
+        show_line = self.figAxesBorderToggle.value
+        size_kw   = {'width': width} if not autosize and width is not None else {}
+
+        self.figure.update_layout(
+            autosize=autosize, height=h, **size_kw,
+            margin=margin,
+            paper_bgcolor=self.figBgColor.value,
+            plot_bgcolor=self.figBgColor.value,
+            font=dict(family=self.figFontFamily.value, color='black'),
+            title=dict(font=dict(size=self.figTitleSize.value, color=self.figTitleColor.value)),
+            legend=dict(font=dict(size=self.figLegendSize.value, color=self.figLegendColor.value)),
+        )
+        axis_kw = dict(
+            title_font=dict(size=self.figAxesLabelSize.value,
+                            color=self.figAxesLabelColor.value),
+            tickfont=dict(size=self.figTickSize.value, color=self.figTickColor.value),
+            ticks=self.figTicksMode.value, showgrid=self.figGridToggle.value,
+            showline=show_line, linewidth=1, linecolor='black', mirror=show_line,
+        )
+        self.figure.update_xaxes(**axis_kw, nticks=self._parse_tick_count(self.figXTickCount.value))
+        self.figure.update_yaxes(**axis_kw, nticks=self._parse_tick_count(self.figYTickCount.value))
 
     @staticmethod
     def _resolve_colorscale(name: str):
@@ -257,35 +320,8 @@ class BaseBrowser:
             return 0
 
     def _apply_figure_layout(self, _=None) -> None:
-        """Apply all Figure Settings widget values to the live figure."""
-        ticks     = self.figTicksMode.value
-        show_grid = self.figGridToggle.value
-        show_line = self.figAxesBorderToggle.value
-        nticks_x  = self._parse_tick_count(self.figXTickCount.value)
-        nticks_y  = self._parse_tick_count(self.figYTickCount.value)
-        new_h = self.figHeight.value
-
-        layout_kwargs = dict(
-            autosize=True,
-            height=new_h,
-            font=dict(family=self.figFontFamily.value),
-            title=dict(font=dict(size=self.figTitleSize.value,
-                                 color=self.figTitleColor.value)),
-            legend=dict(font=dict(size=self.figLegendSize.value,
-                                  color=self.figLegendColor.value)),
-            paper_bgcolor=self.figBgColor.value,
-            plot_bgcolor=self.figBgColor.value,
-        )
-        self.figure.update_layout(**layout_kwargs)
-        axis_common = dict(
-            title_font=dict(size=self.figAxesLabelSize.value,
-                            color=self.figAxesLabelColor.value),
-            tickfont=dict(size=self.figTickSize.value, color=self.figTickColor.value),
-            ticks=ticks, showgrid=show_grid,
-            showline=show_line, linewidth=1, linecolor='black', mirror=show_line,
-        )
-        self.figure.update_xaxes(**axis_common, nticks=nticks_x)
-        self.figure.update_yaxes(**axis_common, nticks=nticks_y)
+        """'Apply Settings' callback. Subclasses override to supply browser-specific args."""
+        self._figure_layout_update(margin=dict(l=60, r=30, t=60, b=50), autosize=True)
 
     def _template_extra_save(self) -> dict:
         """Hook: return extra key/value pairs to store alongside the plotly template.

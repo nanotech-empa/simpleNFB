@@ -68,21 +68,14 @@ class fileBrowser(BaseBrowser):
         'square': 'square', 'triangle-up': 'triangle-up', 'x': 'x',
     }
 
-    def __init__(self, width: int = 700, height: int = 450, fontsize: int = 8,
+    def __init__(self, width: int = 700, height: int = 550, fontsize: int = 8,
                  titlesize: int = 5, cmap: str = 'greys', home_directory: str = './',
                  sxmBrowser=None) -> None:
         # --- state ---
         self.img           = None
         self.figure        = go.FigureWidget()
-        self.figure.update_layout(
-            autosize=True,
-            margin=dict(l=60, r=30, t=60, b=50),
-            height=height,
-            paper_bgcolor='white',
-        )
-        self._apply_font_defaults()
         self._fig_width, self._fig_height = width, height
-        self._setup_figure_autosize(width, height)
+        self._setup_figure_autosize(width, height)   # register JS relayout observer
         self.wfAxes        = None          # external axes hook (optional waterfall)
         self.sxmBrowser    = sxmBrowser
         self.fontsize      = fontsize
@@ -111,6 +104,7 @@ class fileBrowser(BaseBrowser):
         self.dat_files     = []
         self.directories   = [self.active_dir]
         self._scan_cache: dict = {}
+        self._auto_condensed: bool = False   # True when Condensed was set automatically
 
         # Initial placeholder trace
         self.figure.add_trace(go.Scatter(
@@ -119,6 +113,7 @@ class fileBrowser(BaseBrowser):
         self._build_widgets()
         self._build_layout()
         self._connect_observers()
+        self._apply_figure_layout()   # apply default Figure Settings (axes border, fonts, …)
 
         # sxmBrowser coupling must happen after widgets are built
         if sxmBrowser is None:
@@ -386,7 +381,7 @@ class fileBrowser(BaseBrowser):
             widgets.Label('Files', layout=FL(50)),
             self.selectionList,
             self.v_filter_layout],
-            layout=FL(20))
+            layout=FL(98))
         self.v_btn_layout = VBox(children=[
             self.h_selection_btn_layout, self.h_process_layout,
             self.cmapCategory, self.cmapSelection, self.markerSelection], layout=FL(48))
@@ -448,13 +443,14 @@ class fileBrowser(BaseBrowser):
                 HBox(children=[self.xLimitsBtn, self.xLimitLock], layout=FL(98)),
             ], layout=FLH(98)),
             self._figure_settings_tab(),
-        ], layout=FLH(20),
+        ], layout=FLH(98),
         titles=['Legend Settings', 'Title Settings', 'Filter Settings',
                 'STML Mode', '2D Plot', '1D Plot', 'Figure Settings'])
 
         # FigureWidget is itself a widget — use self.figure directly (no .canvas wrapper)
         self.v_image_layout = VBox(children=[
-            self.figure, self.h_user_layout], layout=FL(60))
+            self.figure, self.h_user_layout],
+            layout=widgets.Layout(display='flex', flex_flow='column'))
         self._build_main_layout(self.v_file_select_layout, self.v_image_layout, 5)
 
         # Output panel for code export — embedded in layout so it works in VS Code too
@@ -549,7 +545,7 @@ class fileBrowser(BaseBrowser):
         self.channelXSelect.observe(self.handler_channel_selection, names='value')
         self.channelYSelect.observe(self.handler_channel_selection, names=['value'])
 
-        #self._connect_figure_settings_observers()
+        self._connect_figure_settings_observers()
 
     # ------------------------------------------------------------------
     # Display
@@ -634,6 +630,10 @@ class fileBrowser(BaseBrowser):
                     dummy.marker.cmax       = 1
                     dummy.marker.colorbar.tickvals = [0, 1]
             self.figure.layout.showlegend = self.legendToggle.value
+
+    def _apply_figure_layout(self, _=None) -> None:
+        """'Apply Settings' callback."""
+        self._figure_layout_update(margin=dict(l=60, r=30, t=60, b=50), autosize=True)
 
     # ------------------------------------------------------------------
     # File I/O
@@ -1368,9 +1368,14 @@ class fileBrowser(BaseBrowser):
         self.legendText.options = new_selection
         if new_selection:
             self.legendText.value = new_selection[0]
-        # Auto-activate condensed mode when ≥10 traces and files follow a numbering pattern
-        if len(self.spec_data) >= 10 and self._detect_numbering_pattern() is not None:
-            self.legendModeToggle.value = 'Condensed'   # fires _on_legend_mode_change
+        # Auto-manage Condensed mode based on numbering pattern detection
+        has_pattern = len(self.spec_data) >= 10 and self._detect_numbering_pattern() is not None
+        if has_pattern and self.legendModeToggle.value != 'Condensed':
+            self._auto_condensed = True
+            self.legendModeToggle.value = 'Condensed'       # fires _on_legend_mode_change
+        elif not has_pattern and self._auto_condensed:
+            self._auto_condensed = False
+            self.legendModeToggle.value = 'Parameter'       # revert auto-set
         self._loading = False
 
     def nextDisplay(self, a) -> None:
@@ -1633,6 +1638,8 @@ class fileBrowser(BaseBrowser):
 
     def _on_legend_mode_change(self, change) -> None:
         """Observer for legendModeToggle: update section visibility and redraw."""
+        if not self._loading:
+            self._auto_condensed = False    # manual change clears auto-tracking
         self._apply_legend_mode_visibility(change['new'])
         if not self._loading:
             self._redraw()

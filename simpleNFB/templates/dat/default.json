@@ -5,19 +5,19 @@
       "font": {
         "family": "Arial"
       },
-      "height": 450,
+      "height": 550,
       "legend": {
         "font": {
           "color": "black",
           "size": 11
         }
       },
-      "paper_bgcolor": "white",
-      "plot_bgcolor": "white",
+      "paper_bgcolor": "#ffffff",
+      "plot_bgcolor": "#ffffff",
       "title": {
         "font": {
           "color": "black",
-          "size": 7
+          "size": 12
         }
       },
       "width": 700,

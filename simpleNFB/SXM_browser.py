@@ -46,7 +46,7 @@ class fileBrowser(BaseBrowser):
         'lower right': ('right', 'bottom'),
     }
 
-    def __init__(self, width: int = 600, height: int = 500, fontsize: int = 12,
+    def __init__(self, width: int = 1200, height: int = 1000, fontsize: int = 12,
                  titlesize: int = 12, cmap: str = 'greys',
                  home_directory: str = './') -> None:
         # Normalise cmap: strip matplotlib _r suffix → reversescale toggle
@@ -60,16 +60,8 @@ class fileBrowser(BaseBrowser):
         self.img = None
         self.figure = go.FigureWidget(data=[go.Heatmap(
             z=[[0]], colorscale=self._cmap, reversescale=_reversed)])
-        self.figure.update_layout(
-            autosize=False,
-            width=width,
-            margin=dict(l=60, r=60, t=80, b=60),
-            height=height,
-            paper_bgcolor='white',
-        )
-        self._apply_font_defaults()
         self._fig_width, self._fig_height = width, height
-        self._last_crop = (1.0, 1.0)  # (h_crop, w_crop) stored for _apply_figure_layout
+        self._last_crop = (1.0, 1.0)  # (h_crop, w_crop) updated on each image load
         self.fontsize  = fontsize
         self.titlesize = titlesize
         self.image_data = np.zeros((64, 64))
@@ -89,6 +81,7 @@ class fileBrowser(BaseBrowser):
         self._build_widgets(_reversed)
         self._build_layout()
         self._connect_observers()
+        self._apply_figure_layout()   # configure appearance after widgets exist
         self.display()
 
     # ------------------------------------------------------------------
@@ -235,7 +228,8 @@ class fileBrowser(BaseBrowser):
         self.h_user_layout = HBox(
             children=[VBox(children=[self.h_channel_layout, self.h_process_btn_layout]),
                       self.v_color_layout],
-            layout=FLB(100))
+            layout=widgets.Layout(display='flex', align_items='center',
+                                  justify_content='center'))
         self.v_file_layout = VBox(children=[
             HBox(children=[widgets.Label('Folder', layout=FL(24)),
                            self.directoryDisplayDepth], layout=FL(98)),
@@ -245,7 +239,7 @@ class fileBrowser(BaseBrowser):
                 HBox(children=[self.refreshBtn, self.saveBtn, self.copyBtn, self.configOptionBtn]),
                 widgets.Label('Note')]),
             self.saveNote],
-            layout=FL(20))
+            layout=FL(98))
         self.v_settings_layout = widgets.Accordion(children=[
             VBox(children=[
                 self.titleToggle, self.labelToggle,
@@ -275,11 +269,21 @@ class fileBrowser(BaseBrowser):
                 HBox(children=[self.laplacToggle,   self.laplaceSize],    layout=FL(98)),
             ], layout=FL(98)),
             self._figure_settings_tab(),
-        ], layout=FLH(10),
+        ], layout=FLH(98),
         titles=['Label Settings', 'Title Settings', 'Filter Settings', 'Figure Settings'])
-        # FigureWidget is itself a widget — no Output wrapper needed
+        # FigureWidget is itself a widget — no Output wrapper needed.
+        # align_items/justify_content centre the fixed-width figure in the flex column.
+        # Column layout: figure on top, controls below, each centred horizontally.
+        # align_items='center'  — centres each child on the cross (horizontal) axis
+        #                         at its own natural width; no child is forced to fill.
+        # justify_content='flex-start' — stacks children from the top so the figure
+        #                         sits immediately above the controls with no gap.
         self.v_image_layout = VBox(
-            children=[self.figure, self.h_user_layout], layout=FLB(70))
+            children=[self.figure, self.h_user_layout],
+            layout=widgets.Layout(display='flex', flex_flow='column',
+                                  align_items='center',
+                                  justify_content='flex-start',
+                                  overflow='auto'))
         self._build_main_layout(self.v_file_layout, self.v_image_layout, 10)
 
     def _connect_observers(self) -> None:
@@ -532,25 +536,36 @@ class fileBrowser(BaseBrowser):
 
     # ------------------------------------------------------------------
 
-    def _update_fig_width(self, h_crop: float, w_crop: float) -> None:
-        """Set figure width so the plot area matches the image aspect ratio.
-        With a correctly shaped plot area the image fills it entirely, so the
-        default colorbar position (x=1.02 paper) lands immediately to the right
-        of the image with no manual offset calculation required.
-        """
+    def _compute_fig_size(self, h_crop: float, w_crop: float) -> tuple[int, int]:
+        """Return (width_px, height_px) that fits the image aspect ratio within
+        the figWidth × figHeight budget.  Falls back to a square if crop is zero.
+        Minimum plot area is 200 × 200 px regardless of widget values or aspect ratio."""
+        L, R, T, B = 60, 60, 80, 60
+        MIN_PLOT = 200
+        max_plot_h = max(MIN_PLOT, self.figHeight.value - T - B)
+        max_plot_w = max(MIN_PLOT, self.figWidth.value  - L - R)
         if h_crop <= 0 or w_crop <= 0:
-            return
-        plot_h = max(1, self.figHeight.value - 80 - 60)   # t=80, b=60 margins
-        plot_w = max(1, int(plot_h * w_crop / h_crop))
-        self.figure.update_layout(autosize=False,
-                                  width=60 + plot_w + 60,
-                                  height=self.figHeight.value)
+            return L + max_plot_h + R, T + max_plot_h + B  # square fallback
+        plot_h = max_plot_h
+        plot_w = max(MIN_PLOT, int(plot_h * w_crop / h_crop))
+        if plot_w > max_plot_w:                 # wide image: constrain by width
+            plot_w = max_plot_w
+            plot_h = max(MIN_PLOT, int(plot_w * h_crop / w_crop))
+        return L + plot_w + R, T + plot_h + B
+
+    def _update_fig_width(self, h_crop: float, w_crop: float) -> None:
+        """Resize the figure to match the image aspect ratio (called on each image load)."""
+        w_px, h_px = self._compute_fig_size(h_crop, w_crop)
+        self.figure.update_layout(autosize=False, width=w_px, height=h_px)
 
     def _apply_figure_layout(self, _=None) -> None:
-        """Apply figure settings and recompute width from the stored image crop."""
-        super()._apply_figure_layout(_)
+        """'Apply Settings' callback: compute aspect-ratio size then apply all settings."""
         h_crop, w_crop = self._last_crop
-        self._update_fig_width(h_crop, w_crop)
+        w_px, h_px = self._compute_fig_size(h_crop, w_crop)
+        self._figure_layout_update(
+            margin=dict(l=60, r=60, t=80, b=60),
+            autosize=False, width=w_px, height=h_px,
+        )
 
     def _add_figure_labels(self, w: float, h: float) -> None:
         """Overlay corner text / scalebar annotations via plotly paper-coords."""
@@ -630,7 +645,7 @@ class fileBrowser(BaseBrowser):
         n_lines = (self.scan_info.count('<br>') + 1) if self.scan_info else 0
         t_margin = max(80, int(n_lines * self.titleFontSize.value * 2.5) + 40)
         self.figure.update_layout(
-            title=dict(text=self.scan_info, font=dict(size=self.figTitleSize.value), x=0,y=0.9,yref='container',xref='paper',xanchor='left',yanchor='bottom',automargin=True),)
+            title=dict(text=self.scan_info, font=dict(size=self.figTitleSize.value), x=0,y=0.925,yref='container',xref='paper',xanchor='left',yanchor='bottom',automargin=True),)
             #margin=dict(t=t_margin),
         
 
@@ -780,4 +795,5 @@ class fileBrowser(BaseBrowser):
             self.updateErrorText('channel selection error: ' + str(err))
 
 
-# Backward-compatible alias so __init__.py can `from .S
+# Backward-compatible alias so __init__.py can `from .SXM_browser import imageBrowser`
+imageBrowser = fileBrowser
