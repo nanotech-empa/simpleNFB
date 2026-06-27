@@ -30,7 +30,6 @@ class BaseBrowser:
     * ``self.directories``         – list[Path]
     * ``self.active_dir``          – Path
     * ``self.directorySelection``  – widget with ``.index``, ``.options``, ``.value``
-    * ``self.directoryDisplayDepth`` – widget with ``.value`` ('full' | int)
     * ``self.rootFolder``          – widget with ``.value``
     * ``self.selectionList``       – widget with ``.value``, ``.index``
     * ``self.refreshBtn``          – Button widget (used for type-identity checks)
@@ -85,10 +84,6 @@ class BaseBrowser:
             description='', layout=widgets.Layout(display='flex', width='95%'))
         self.directorySelection = widgets.Select(
             options=self.directories, rows=8, layout=FL(98))
-        self.directoryDisplayDepth = widgets.Dropdown(
-            description='depth', value=1, options=['full', 1, 2, 3, 4, 5],
-            tooltip='Depth of folder structure shown in selection menu',
-            layout=FLB(75), style={'description_width': '40px'})
         self.filenameText = Text_Widget('')
         self.indexText    = Text_Widget('0')
         self.errorText    = Selection_Widget([], 'Out:', rows=5)
@@ -507,55 +502,69 @@ class BaseBrowser:
     # Directory discovery
     # ------------------------------------------------------------------
 
-    def find_directories(self, _path: Path) -> list:
-        """
-        Recursively collect sub-directories of *_path*, skipping any whose
-        name contains a string from ``_SKIP_DIRS`` and any bare data files
-        that appear at the top level.
-
-        Side-effect: extends ``self.directories`` with the found paths.
-
-        Returns
-        -------
-        list[Path]
-            The directories found at this level of recursion (not the full
-            accumulated list).
-        """
-        directories = []
+    def _scan_directory_tree(self, root: Path, _depth: int = 0) -> list:
+        """Return [(Path, depth), …] for *root* and every non-skipped
+        subdirectory, in pre-order (parent always before its children).
+        root itself is depth 0; its immediate children are depth 1, etc.
+        Sorted alphabetically at each level for consistent ordering."""
+        result = [(root, _depth)]
         try:
-            entries = os.listdir(_path)
+            children = sorted(
+                (Path(e.path) for e in os.scandir(root)
+                 if e.is_dir() and not any(s in e.name for s in self._SKIP_DIRS)),
+                key=lambda p: p.name.lower(),
+            )
         except PermissionError:
-            return directories
+            return result
+        for child in children:
+            result.extend(self._scan_directory_tree(child, _depth + 1))
+        return result
 
-        for entry in entries:
-            # Skip bare .dat / .sxm files that appear in os.listdir
-            if entry[-4:] in ('.dat', '.sxm'):
-                continue
-            entry_path = Path(_path) / entry
-            if not os.path.isdir(entry_path):
-                continue
-            if any(skip in entry for skip in self._SKIP_DIRS):
-                continue
-            directories.append(entry_path)
-            self.find_directories(entry_path)  # recurse
+    def _build_tree_options(self, tree: list) -> list:
+        """Convert [(Path, depth), …] from _scan_directory_tree into display
+        strings using Unicode tree-drawing characters so parent–child
+        relationships are immediately visible in the Select widget.
 
-        self.directories.extend(directories)
-        return directories
-
-    def update_directories(self, _event=None) -> None:
+        Example output:
+            📁 session folder
+            ├─ 2024-01
+            │  ├─ raw
+            │  └─ processed
+            └─ 2024-02
+               └─ raw
         """
-        Rebuild ``directorySelection.options`` with paths trimmed to the
-        depth chosen in ``directoryDisplayDepth``.
-        """
-        depth_val = self.directoryDisplayDepth.value
-        depth = 0 if depth_val == 'full' else -int(depth_val)
+        if not tree:
+            return []
+        display = ['📁 session folder']
+        for i, (path, depth) in enumerate(tree[1:], 1):
+            # Determine whether this node is the last sibling at its depth
+            is_last = True
+            for j in range(i + 1, len(tree)):
+                if tree[j][1] == depth:
+                    is_last = False
+                    break
+                if tree[j][1] < depth:
+                    break
+            # Build the vertical-pipe prefix for ancestor levels
+            prefix = ''
+            for d in range(1, depth):
+                has_continuation = False
+                for j in range(i + 1, len(tree)):
+                    if tree[j][1] == d:
+                        has_continuation = True
+                        break
+                    if tree[j][1] < d:
+                        break
+                prefix += '│  ' if has_continuation else '   '
+            connector = '└─ ' if is_last else '├─ '
+            display.append(prefix + connector + path.name)
+        return display
 
-        display_dirs = [
-            '\\'.join(str(d).split('\\')[depth:]) for d in self.directories
-        ]
-        if display_dirs:
-            display_dirs[0] = 'session folder'
-        self.directorySelection.options = display_dirs
+    def _refresh_directory_tree(self) -> None:
+        """Rescan from active_dir and update self.directories + widget options."""
+        tree = self._scan_directory_tree(self.active_dir)
+        self.directories = [path for path, _ in tree]
+        self.directorySelection.options = self._build_tree_options(tree)
 
     # ------------------------------------------------------------------
     # File output helpers
@@ -645,11 +654,8 @@ class BaseBrowser:
             current_directory = self.directorySelection.value
 
         if os.path.exists(new_root) and os.path.isdir(new_root):
-            self.directorySelection.options = [self.active_dir]
-            self.directories = [self.active_dir]
-            self.active_dir = Path(new_root)
-            self.find_directories(self.active_dir)
-            self.update_directories(event)
+            self.active_dir = Path(new_root)   # must update before resetting directories
+            self._refresh_directory_tree()
 
         # Restore selection only when a valid refresh was requested
         if current_directory is not None:
@@ -676,15 +682,13 @@ class BaseBrowser:
             "(function() {"
             "  var code = " + code_json + ";"
             "  var app = window.jupyterapp || window.jupyterlab;"
-            "  if (app && app.commands) {"
-            "    app.commands.execute('notebook:insert-cell-below').then(function() {"
-            "      app.commands.execute('notebook:replace-selection', { text: code });"
-            "    });"
-            "    return;"
-            "  }"
-            "  if (window.Jupyter && window.Jupyter.notebook) {"
-            "    var nb = window.Jupyter.notebook;"
-            "    var cell = nb.insert_cell_below('code');"
+            "  if (app) {"
+            "    var nb = app.shell.currentWidget;"
+            "    if (nb && nb.content && nb.content.activeCell) {"
+            "      nb.content.activeCell.model.sharedModel.setSource(code);"
+            "    }"
+            "  } else if (window.Jupyter) {"
+            "    var cell = Jupyter.notebook.get_selected_cell();"
             "    cell.set_text(code);"
             "    cell.select();"
             "  }"

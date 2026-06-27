@@ -231,8 +231,7 @@ class fileBrowser(BaseBrowser):
             layout=widgets.Layout(display='flex', align_items='center',
                                   justify_content='center'))
         self.v_file_layout = VBox(children=[
-            HBox(children=[widgets.Label('Folder', layout=FL(24)),
-                           self.directoryDisplayDepth], layout=FL(98)),
+            widgets.Label('Folder', layout=FL(98)),
             self.directorySelection,
             widgets.Label('Images'), self.selectionList,
             VBox(children=[
@@ -319,7 +318,6 @@ class fileBrowser(BaseBrowser):
         self.vmin.observe(self._on_limits_change, names='value')
         self.vmax.observe(self._on_limits_change, names='value')
 
-        self.directoryDisplayDepth.observe(self.update_directories, names='value')
         self.nextBtn.on_click(self.nextDisplay)
         self.previousBtn.on_click(self.previousDisplay)
         self.refreshBtn.on_click(self.handler_root_folder_update)

@@ -375,8 +375,7 @@ class fileBrowser(BaseBrowser):
         self.v_channel_layout = VBox(children=[
             self.channelXSelect, self.channelYSelect, self.saveNote], layout=FL(48))
         self.v_file_select_layout = VBox(children=[
-            HBox(children=[widgets.Label('Folder', layout=FL(24)),
-                           self.directoryDisplayDepth], layout=FL(98)),
+            widgets.Label('Folder', layout=FL(98)),
             self.directorySelection,
             widgets.Label('Files', layout=FL(50)),
             self.selectionList,
@@ -538,7 +537,6 @@ class fileBrowser(BaseBrowser):
 
         self.rootFolder.observe(self.handler_root_folder_update, names='value')
         self.directorySelection.observe(self.handler_folder_selection, names=['value'])
-        self.directoryDisplayDepth.observe(self.update_directories, names=['value'])
         self.selectionList.observe(self.handler_file_selection, names=['value'])
         self.filterSelection.observe(self.handler_folder_selection, names='value')
         self.addFilterBtn.on_click(self.handler_update_filters)
@@ -1415,7 +1413,7 @@ class fileBrowser(BaseBrowser):
         from textwrap import dedent
 
         files  = list(self.selectionList.value) or self.dat_files
-        d      = str(self.active_dir).replace('\\', '/')
+        d      = str(self.directories[self.directorySelection.index]).replace('\\', '/')
         x_ch   = self.channelXSelect.value
         y_ch   = self.channelYSelect.value[0] if self.channelYSelect.value else ''
         exp    = (self.loaded_experiments or [''])[0].lower()
