@@ -1410,28 +1410,38 @@ class fileBrowser(BaseBrowser):
 
     def _build_export_code(self) -> str:
         """Build a self-contained Python snippet reproducing the current figure."""
-        from textwrap import dedent
-
         files  = list(self.selectionList.value) or self.dat_files
         d      = str(self.directories[self.directorySelection.index]).replace('\\', '/')
         x_ch   = self.channelXSelect.value
         y_ch   = self.channelYSelect.value[0] if self.channelYSelect.value else ''
         exp    = (self.loaded_experiments or [''])[0].lower()
-        is_stml = 'stml' in exp
+        x_mode = self.xScaleMode.value
+        y_mode = self.yScaleMode.value
+
+        # STML flags — all gated on toggle *and* experiment type
+        is_stml     = self.stmlToggle.value and 'stml' in exp
+        use_time    = is_stml and self.normalizeTimeBtn.value
+        use_current = is_stml and self.normalizeCurrentBtn.value
+        use_rebin   = is_stml and self.normalizeEnergyBtn.value
+        use_plasmon = (is_stml and self.normalizePlasmonBtn.value
+                       and self.plasmonInfo['file'] is not None)
 
         # ── imports ──────────────────────────────────────────────────────────
+        scipy_sig = 'medfilt, savgol_filter' if use_plasmon else 'medfilt'
         lines = [
             "import numpy as np",
             "from pathlib import Path",
-            "from scipy.signal import medfilt",
-            "import plotly.graph_objects as go",
+            f"from scipy.signal import {scipy_sig}",
+            "import matplotlib.pyplot as plt",
             "from spmpy import Spm",
             "from simpleNFB.process_utils import (",
             "    rebin_intensity_nm_to_ev, smooth_data, group_average,",
             "    despike_z_score, moving_average,",
             ")",
-            "",
         ]
+        if use_plasmon:
+            lines.append("from scipy.interpolate import interp1d")
+        lines.append("")
 
         # ── file list ────────────────────────────────────────────────────────
         lines += [f"data_dir = Path(r'{d}')"]
@@ -1457,16 +1467,42 @@ class fileBrowser(BaseBrowser):
             ]
         lines += [""]
 
-        # ── STML wavelength→eV conversion ────────────────────────────────────
+        # ── STML normalization ───────────────────────────────────────────────
         if is_stml:
-            lines += [
-                "spec_x, spec_data = zip(*[",
-                "    rebin_intensity_nm_to_ev(x, y)",
-                "    for x, y in zip(spec_x, spec_data)",
-                "])",
-                "spec_x, spec_data = list(spec_x), list(spec_data)",
-                "",
-            ]
+            if use_plasmon:
+                pfile = self.plasmonInfo['file']
+                lines += [
+                    f"plasmon_ref = Spm(str(data_dir / '{pfile}'))",
+                    "ref_y, _ = plasmon_ref.get_channel('Intensity')",
+                    "ref_x, _ = plasmon_ref.get_channel('Wavelength')",
+                    "ref_y = abs(savgol_filter(ref_y, 21, 1))",
+                    "ref_y *= (ref_y > 35)",
+                    "ref_y /= np.max(ref_y)",
+                    "plasmon_interp = interp1d(1240 / ref_x, ref_y,"
+                    " bounds_error=False, fill_value=0.0)",
+                    "",
+                ]
+            lines += ["xx, data = [], []",
+                      "for i, (x, y, s) in enumerate(zip(spec_x, spec_data, spec)):"]
+            lines += ["    normfactor = 1.0"]
+            if use_time:
+                lines += ["    normfactor *= float(s.header['Exposure Time [ms]']) / 1000"]
+            if use_current:
+                lines += ["    normfactor *= abs(np.average(s.get_channel('I')[0]))"]
+            if use_rebin:
+                lines += ["    energies, intensities = rebin_intensity_nm_to_ev(x, y)"]
+            else:
+                lines += ["    energies = 1240 / x", "    intensities = y"]
+            if use_plasmon:
+                lines += [
+                    "    plasmon = abs(plasmon_interp(energies)) + 0.1",
+                    "    data.append(intensities / normfactor / plasmon"
+                    " * (plasmon > 0) * (y > 5))",
+                ]
+            else:
+                lines += ["    data.append(intensities / normfactor)"]
+            lines += ["    xx.append(energies)",
+                      "spec_x, spec_data = xx, data", ""]
 
         # ── group average (before per-trace loop) ────────────────────────────
         if (self.averageToggle.value
@@ -1507,34 +1543,40 @@ class fileBrowser(BaseBrowser):
             lines += filter_body
             lines += ["    spec_data[i] = y", ""]
 
-        # ── axis scale transforms ────────────────────────────────────────────
-        x_mode = self.xScaleMode.value
-        y_mode = self.yScaleMode.value
-        if x_mode == 'Log':
-            lines += ["spec_x = [np.log10(x) for x in spec_x]", ""]
-        elif x_mode == 'Custom' and self.xCustomFormula.value.strip():
+        # ── axis scale transforms (Custom only; Log handled by ax.set_*scale) ─
+        if x_mode == 'Custom' and self.xCustomFormula.value.strip():
             expr = self.xCustomFormula.value.strip()
             lines += [f"spec_x = [eval('{expr}') for x in spec_x]", ""]
-        if y_mode == 'Log':
-            lines += ["spec_data = [np.log10(y) for y in spec_data]", ""]
-        elif y_mode == 'Custom' and self.yCustomFormula.value.strip():
+        if y_mode == 'Custom' and self.yCustomFormula.value.strip():
             expr = self.yCustomFormula.value.strip()
             lines += [f"spec_data = [eval('{expr}') for y in spec_data]", ""]
 
         # ── plot ─────────────────────────────────────────────────────────────
-        x_info = self.spec_info[0] if self.spec_info else {}
-        x_label = f"{x_info.get('x_label','x')} ({x_info.get('x_unit','')})"
-        y_label = f"{y_ch} ({x_info.get('y_unit','')})"
+        x_info  = self.spec_info[0] if self.spec_info else {}
+        auto_x  = f"{x_info.get('x_label', 'x')} ({x_info.get('x_unit', '')})"
+        auto_y  = f"{y_ch} ({x_info.get('y_unit', '')})"
+        x_label = self.xLabel1D.value.strip() or auto_x
+        y_label = self.yLabel1D.value.strip() or auto_y
+        avg_active = (self.averageToggle.value
+                      and len(self.spec_data) >= self.groupSize.value
+                      and len(self.spec_data) % self.groupSize.value == 0)
+        if avg_active:
+            k = self.groupSize.value
+            lines += [f"labels = files[::{k}]", ""]
+        else:
+            lines += ["labels = files"]
         lines += [
-            "fig = go.Figure()",
-            "for i, (x, y) in enumerate(zip(spec_x, spec_data)):",
-            "    fig.add_trace(go.Scatter(x=x, y=y, mode='lines', name=files[i]))",
-            "fig.update_layout(",
-            f"    xaxis_title='{x_label}',",
-            f"    yaxis_title='{y_label}',",
-            ")",
-            "fig.show()",
+            "fig, ax = plt.subplots()",
+            "for x, y, lbl in zip(spec_x, spec_data, labels):",
+            "    ax.plot(x, y, label=lbl)",
+            f"ax.set_xlabel('{x_label}')",
+            f"ax.set_ylabel('{y_label}')",
         ]
+        if x_mode == 'Log':
+            lines += ["ax.set_xscale('log')"]
+        if y_mode == 'Log':
+            lines += ["ax.set_yscale('log')"]
+        lines += ["ax.legend()", "plt.tight_layout()", "plt.show()"]
 
         return '\n'.join(lines)
 
