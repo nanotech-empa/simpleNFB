@@ -5,6 +5,7 @@ spectrumBrowser widget for Nanonis DAT spectroscopy data in Jupyter notebooks.
 Uses plotly FigureWidget for rendering (replaces matplotlib).
 '''
 
+import asyncio
 import bisect
 import os
 import re
@@ -105,6 +106,8 @@ class fileBrowser(BaseBrowser):
         self.directories   = [self.active_dir]
         self._scan_cache: dict = {}
         self._auto_condensed: bool = False   # True when Condensed was set automatically
+        self._redraw_handle = None           # asyncio.TimerHandle for debounce
+        self._data_dirty:   bool = False     # True when update_image_data() must run before next render
 
         # Initial placeholder trace
         self.figure.add_trace(go.Scatter(
@@ -463,9 +466,9 @@ class fileBrowser(BaseBrowser):
         for w in (self.legendToggle, self.cmapSelection):
             w.observe(self._update_display, names='value')
         # parameterLegendList change may affect condensed colorbar label lookup → tier 1
-        self.parameterLegendList.observe(self._redraw, names='value')
+        self.parameterLegendList.observe(self._schedule_redraw, names='value')
 
-        # Tier 1 — filter/transform pipeline; full trace rebuild required
+        # Tier 1 — filter/transform pipeline; debounced full trace rebuild
         for w in (self.plot2DToggle, self.plot2DYParam,
                   self.plot2DYLabel, self.plot2DXLabel,
                   self.offsetToggle, self.offsetSize,
@@ -474,7 +477,7 @@ class fileBrowser(BaseBrowser):
                   self.movAvgBtn, self.movAvgSize,
                   self.thresholdToggle, self.thresholdValue,
                   self.averageToggle, self.flattenBtn, self.fixZeroBtn):
-            w.observe(self._redraw, names='value')
+            w.observe(self._schedule_redraw, names='value')
 
         # Title-only — patch figure.layout.title in-place; no trace rebuild
         for w in (self.titleToggle, self.nameToggle, self.setpointToggle,
@@ -483,17 +486,17 @@ class fileBrowser(BaseBrowser):
             w.observe(self._update_title, names='value')
         # SVG filter affects data pipeline → tier 1
         for w in (self.svgToggle, self.svgSize, self.svgOrder):
-            w.observe(self._redraw, names='value')
+            w.observe(self._schedule_redraw, names='value')
 
-        # Tier 3 — full pipeline (channel data reload or STML normalization)
+        # Tier 3 — full pipeline (data reload + render); debounced with dirty flag
         for w in (self.stmlToggle,
                   self.normalizeTimeBtn, self.normalizeCurrentBtn,
                   self.normalizeEnergyBtn, self.normalizePlasmonBtn):
-            w.observe(self.redraw_image, names='value')
+            w.observe(self._schedule_redraw_dirty, names='value')
 
         # legend group
         self.groupSize.observe(self.update_legend_settings, names='value')
-        self.groupSize.observe(self._redraw, names='value')
+        self.groupSize.observe(self._schedule_redraw, names='value')
         self.averageToggle.observe(self.update_legend_settings, names='value')
         self.legendModeToggle.observe(self._on_legend_mode_change, names='value')
         self.legendUpdate.on_click(self.update_legend_entry)
@@ -507,7 +510,7 @@ class fileBrowser(BaseBrowser):
         for w in (self.xScaleMode, self.yScaleMode,
                   self.xLabel1D, self.yLabel1D,
                   self.xCustomFormula, self.yCustomFormula):
-            w.observe(self._redraw, names='value')
+            w.observe(self._schedule_redraw, names='value')
         # Show/hide formula entry when Custom is toggled
         self.xScaleMode.observe(self._toggle_formula_visibility, names='value')
         self.yScaleMode.observe(self._toggle_formula_visibility, names='value')
@@ -524,7 +527,7 @@ class fileBrowser(BaseBrowser):
         for w in (self.plot2DYMin, self.plot2DYMax,
                   self.plot2DXMin, self.plot2DXMax,
                   self.plot2DVMin, self.plot2DVMax):
-            w.observe(self._redraw, names='value')
+            w.observe(self._schedule_redraw, names='value')
 
         # legacy smoothing widgets (not in layout; tier-2 for compat)
         for w in (self.smoothBtn, self.windowParam, self.orderParam,
@@ -560,6 +563,40 @@ class fileBrowser(BaseBrowser):
         cur  = self.cmapSelection.value
         self.cmapSelection.options = opts
         self.cmapSelection.value   = cur if cur in opts else opts[0]
+
+    def _schedule_redraw(self, *_, data_dirty: bool = False) -> None:
+        """Debounced entry point for observer callbacks.
+
+        Schedules a render on the kernel's asyncio event loop after a 150 ms
+        quiescence window. Safe to call from any ipywidgets observe callback
+        because it always runs on the main kernel thread.
+        data_dirty=True signals that update_image_data() must run first.
+        """
+        if self._loading:
+            return
+        if data_dirty:
+            self._data_dirty = True
+        if self._redraw_handle is not None:
+            self._redraw_handle.cancel()
+            self._redraw_handle = None
+        try:
+            loop = asyncio.get_running_loop()
+            self._redraw_handle = loop.call_later(0.15, self._execute_redraw)
+        except RuntimeError:
+            # No running loop (e.g. during testing) — render immediately
+            self._execute_redraw()
+
+    def _schedule_redraw_dirty(self, *_) -> None:
+        """Convenience observer target for Tier 3 (data-reload) widgets."""
+        self._schedule_redraw(data_dirty=True)
+
+    def _execute_redraw(self) -> None:
+        """Executes after the debounce window on the kernel's event loop."""
+        self._redraw_handle = None
+        if self._data_dirty:
+            self._data_dirty = False
+            self.update_image_data()
+        self._redraw()
 
     def _redraw(self, *_) -> None:
         """Route to 2D or 1D rendering; FigureWidget updates reactively."""
@@ -684,7 +721,6 @@ class fileBrowser(BaseBrowser):
             self._loading = True
             self._update_channel_selection()   # channel observers suppressed
             self._loading = False
-            self.update_image_data()           # runs exactly once
         else:
             return Spm(os.path.join(directory, filename))
 
@@ -1077,13 +1113,14 @@ class fileBrowser(BaseBrowser):
                 pass
 
     def update_axes(self) -> None:
-        """Re-render all spectra with current filter/display settings."""
-        self.figure.data = ()
-        self.figure.update_layout(xaxis2=dict(visible=False, overlaying='x', side='top',automargin=True))
+        """Re-render all spectra with current filter/display settings.
 
+        All computation runs in pure Python first; a single batch_update()
+        then sends the complete new state to the frontend in one comm message.
+        """
+        # ── computation (no FigureWidget mutations) ───────────────────────
         x_values, y_values = self._apply_filters(self.spec_x, self.spec_data)
 
-        # Apply custom axis scale transforms before plotting
         x_mode = self.xScaleMode.value
         y_mode = self.yScaleMode.value
         if x_mode == 'Custom' and self.xCustomFormula.value.strip():
@@ -1097,18 +1134,25 @@ class fileBrowser(BaseBrowser):
             except Exception as err:
                 self.updateErrorText(f'Y formula error: {err}')
 
-        labels = self._build_legend_labels(x_values, y_values)
-        self._plot_spectra(x_values, y_values, labels)
+        labels   = self._build_legend_labels(x_values, y_values)
+        n        = len(y_values)
+        positions = self._color_positions(n)
+        colors   = px.colors.sample_colorscale(
+            self._resolve_colorscale(self.cmapSelection.value), positions)
 
-        # Condensed mode: suppress per-trace legend; add a colorbar dummy trace instead
-        if self.legendModeToggle.value == 'Condensed':
+        # Build all traces as plain Python objects — no widget mutations yet
+        condensed = self.legendModeToggle.value == 'Condensed'
+        traces = [
+            go.Scatter(x=x, y=y, name=lbl, mode='lines',
+                       line=dict(color=c),
+                       showlegend=not condensed)
+            for x, y, lbl, c in zip(x_values, y_values, labels, colors)
+        ]
+        if condensed:
             min_name, max_name = self._condensed_range_labels()
-            base_cs   = self._resolve_colorscale(self.cmapSelection.value)
-            step_cs   = self._condensed_step_colorscale(base_cs, len(y_values))
-            with self.figure.batch_update():
-                for trace in self.figure.data:
-                    trace.showlegend = False
-            self.figure.add_trace(go.Scatter(
+            base_cs  = self._resolve_colorscale(self.cmapSelection.value)
+            step_cs  = self._condensed_step_colorscale(base_cs, n)
+            traces.append(go.Scatter(
                 x=[None], y=[None], mode='markers', hoverinfo='none', name='',
                 showlegend=False,
                 marker=dict(colorscale=step_cs, showscale=True,
@@ -1118,37 +1162,49 @@ class fileBrowser(BaseBrowser):
                                           ticktext=[min_name, max_name])),
             ))
 
-        n = len(self.figure.data)
-        legend_fs = self.legendFontsize[bisect.bisect_left([4, 16], n)]
+        n_all     = len(traces)
+        legend_fs = self.legendFontsize[bisect.bisect_left([4, 16], n_all)]
 
-        # Use label override if set, otherwise auto-generate from channel info
-        auto_x = f'{self.spec_info[0]["x_label"]} ({self.spec_info[0]["x_unit"]})'
-        auto_y = f'{self.channelYSelect.value[0]} ({self.spec_info[0]["y_unit"]})'
+        auto_x  = f'{self.spec_info[0]["x_label"]} ({self.spec_info[0]["x_unit"]})'
+        auto_y  = f'{self.channelYSelect.value[0]} ({self.spec_info[0]["y_unit"]})'
         x_title = self.xLabel1D.value.strip() or auto_x
         y_title = self.yLabel1D.value.strip() or auto_y
 
         x_axis_type = 'log' if x_mode == 'Log' else 'linear'
         y_axis_type = 'log' if y_mode == 'Log' else 'linear'
 
+        xaxis_kw = dict(title=x_title, type=x_axis_type, showgrid=False,
+                        ticks='outside', minor=dict(ticks='outside', ticklen=3),
+                        automargin=True)
+        yaxis_kw = dict(title=y_title, type=y_axis_type, showgrid=False,
+                        ticks='outside', minor=dict(ticks='outside', ticklen=3),
+                        automargin=True)
+        if self.xLimitLock.value:
+            xaxis_kw['range'] = [self.xLimitsMin.value, self.xLimitsMax.value]
+        if self.yLimitLock.value:
+            yaxis_kw['range'] = [self.yLimitsMin.value, self.yLimitsMax.value]
+
+        # ── atomic FigureWidget trace replacement (clear + add in two messages) ─
+        # figure.data = () clears the frontend in one comm message.
+        # add_traces(list) registers each trace (_parent, _prop_path) and sends
+        # all of them in a single addTraces comm message — required for the
+        # frontend to render correctly.  Direct assignment `figure.data = tuple`
+        # skips the internal registration step and produces a silent no-op.
+        self.figure.data = ()
+        if traces:
+            self.figure.add_traces(traces)
         self.figure.update_layout(
             autosize=True,
             height=self.figHeight.value,
-            xaxis=dict(title=x_title, type=x_axis_type, showgrid=False, ticks='outside',
-                       minor=dict(ticks='outside', ticklen=3), automargin=True),
-            yaxis=dict(title=y_title, type=y_axis_type, showgrid=False, ticks='outside',
-                       minor=dict(ticks='outside', ticklen=3), automargin=True),
+            xaxis=xaxis_kw,
+            xaxis2=dict(visible=False, overlaying='x', side='top', automargin=True),
+            yaxis=yaxis_kw,
             showlegend=self.legendToggle.value,
             legend=dict(font=dict(size=legend_fs), bgcolor='rgba(0,0,0,0)'),
         )
+
         self._apply_figure_title()
         self._sync_axis_limit_sliders()
-        if self.xLimitLock.value:
-            self.figure.update_layout(
-                xaxis=dict(range=[self.xLimitsMin.value, self.xLimitsMax.value], automargin=True))
-        if self.yLimitLock.value:
-            self.figure.update_layout(
-                yaxis=dict(range=[self.yLimitsMin.value, self.yLimitsMax.value], automargin=True))
-
         if self.stmlToggle.value and 'stml' in (self.loaded_experiments or [''])[0].lower():
             self._add_stml_axis()
 
@@ -1385,6 +1441,7 @@ class fileBrowser(BaseBrowser):
             self._loading = False
             try:
                 self.load_new_image()
+                self.update_image_data()
                 self._update_legend_on_load()
                 self._redraw()
             except Exception as err:
@@ -1399,6 +1456,7 @@ class fileBrowser(BaseBrowser):
             self._loading = False
             try:
                 self.load_new_image()
+                self.update_image_data()
                 self._update_legend_on_load()
                 self._redraw()
             except Exception as err:
@@ -1739,6 +1797,7 @@ class fileBrowser(BaseBrowser):
                 self.spec_index = [0]
                 try:
                     self.load_new_image()
+                    self.update_image_data()
                     self._redraw()
                 except Exception as err:
                     self.updateErrorText('folder selection error: ' + str(err))
@@ -1753,6 +1812,7 @@ class fileBrowser(BaseBrowser):
             self.spec_index = [self.dat_files.index(v) for v in self.selectionList.value]
             if self.selectionList.value:
                 self.load_new_image()
+                self.update_image_data()
                 self._update_legend_on_load()
                 self._redraw()
         except Exception as err:
@@ -1871,6 +1931,35 @@ class fileBrowser(BaseBrowser):
         """
         return [self._get_scan_info(s, key) for s in self._get_spec_selection(filter=filter)]
 
-    # ------------------------------------------------------------------
-    # Misc
-    
+    def get_channel(self, channel: str, filter: bool = False) -> list:
+        """Return raw channel data arrays for each spectrum in the current selection.
+
+        Parameters
+        ----------
+        channel : str
+            Channel name passed to Spm.get_channel() (e.g. 'I', 'V', 'Intensity').
+        filter : bool
+            When True and averaging is active, return one array per group.
+
+        Returns
+        -------
+        list of ndarray -- one entry per spectrum (or group when filter=True).
+        """
+        return [s.get_channel(channel)[0] for s in self._get_spec_selection(filter=filter)]
+
+    def get_plot_data(self) -> list:
+        """Return the processed (x, y) data currently shown in the figure.
+
+        Reads directly from the live Plotly traces, so all active filters,
+        normalizations and axis transforms are already applied. Dummy traces
+        used for the condensed colorbar are excluded.
+
+        Returns
+        -------
+        list of (ndarray, ndarray) -- one (x, y) tuple per visible trace.
+        """
+        return [
+            (np.asarray(t.x), np.asarray(t.y))
+            for t in self.figure.data
+            if t.x is not None and len(t.x) > 0 and t.x[0] is not None
+        ]
