@@ -11,6 +11,7 @@ at call-time, so this module is importable without a running Jupyter kernel (imp
 for unit tests).
 """
 
+import asyncio
 import os
 import subprocess
 from pathlib import Path
@@ -56,6 +57,10 @@ class BaseBrowser:
     # Reference counter for nested busy calls; status clears only when it reaches 0
     _busy_count: int = 0
 
+    # Debounce state (I1): shared 150 ms coalescing of observer-triggered redraws.
+    _redraw_handle = None            # asyncio.TimerHandle for the pending render
+    _data_dirty: bool = False        # True when update_image_data() must run first
+
     # Subclasses set this to 'sxm' or 'dat' to pick their template subdirectory
     _TEMPLATES_SUBDIR: str = ''
 
@@ -85,8 +90,9 @@ class BaseBrowser:
         self.directorySelection = widgets.Select(
             options=self.directories, rows=8, layout=FL(98))
         self.filenameText = Text_Widget('')
-        self.indexText    = Text_Widget('0')
         self.errorText    = Selection_Widget([], 'Out:', rows=5)
+        # Lives in the full-width Messages accordion (see _build_main_layout)
+        self.errorText.layout.width = '98%'
 
     def _build_main_layout(self, file_col, img_col, session_label_width: int = 5) -> None:
         """Assemble the top-level 3-column layout and set it as self.h_main_layout.
@@ -95,6 +101,8 @@ class BaseBrowser:
           file_col        — flex: '0 0 auto', fixed 250 px; wide enough for typical paths
           img_col         — flex: '1 1 auto'; expands to fill all remaining space
           v_settings_layout — flex: '0 0 auto', fixed 310 px; wide enough for all tab widgets
+          Messages accordion — full-width collapsible error log below the 3-column row;
+                               auto-expands on new messages (see updateErrorText).
         """
         import ipywidgets as widgets
         from .widget_helpers import HBox, VBox
@@ -119,6 +127,11 @@ class BaseBrowser:
         self.v_settings_layout.layout.width     = '310px'
         self.v_settings_layout.layout.min_width = '280px'
 
+        # Collapsed by default (selected_index=None); opened by updateErrorText
+        self._error_accordion = widgets.Accordion(
+            children=[self.errorText], titles=['Messages'], selected_index=None,
+            layout=widgets.Layout(width='100%'))
+
         _row = widgets.Layout(display='flex', flex_flow='row',
                               width='100%', align_items='stretch')
         self.h_main_layout = VBox(children=[
@@ -129,7 +142,8 @@ class BaseBrowser:
                 self._status_widget],
                 layout=widgets.Layout(display='flex', flex_flow='row',
                                       width='100%', align_items='center')),
-            HBox(children=[file_col, img_col, self.v_settings_layout], layout=_row)],
+            HBox(children=[file_col, img_col, self.v_settings_layout], layout=_row),
+            self._error_accordion],
             layout=widgets.Layout(display='flex', flex_flow='column', width='100%',justify_content='space-between',align_items='stretch'),)
 
     # ------------------------------------------------------------------
@@ -191,8 +205,12 @@ class BaseBrowser:
         return name
 
 
-    def _setup_figure_autosize(self, fig_width: int = None, fig_height: int = None) -> None:
-        """Register the JS->Python relayout observer used by subclass hooks (e.g. STML axis sync)."""
+    def _connect_relayout_observer(self) -> None:
+        """Register the JS->Python relayout observer used by subclass hooks (e.g. STML axis sync).
+
+        Named for what it does: it does NOT configure autosize. Autosize is set
+        per-browser in _apply_figure_layout / _figure_layout_update.
+        """
         self.figure.observe(self._on_figure_relayout, names=['_js2py_relayout'])
 
     def _on_figure_relayout(self, change) -> None:
@@ -265,10 +283,6 @@ class BaseBrowser:
         self.figApplyTemplateBtn = widgets.Button(description='Apply Template', layout=W98)
         self._load_templates_dir()  # needs figTemplateList to exist first
 
-    # keep old name as alias so any external callers don't break
-    def _build_font_widgets(self, fig_width: int = 600, fig_height: int = 500) -> None:
-        self._build_figure_settings_widgets(fig_width, fig_height)
-
     def _figure_settings_tab(self):
         """Return a VBox for the Figure Settings accordion tab."""
         import ipywidgets as widgets
@@ -276,7 +290,7 @@ class BaseBrowser:
         HB  = lambda *ws: widgets.HBox(children=list(ws), layout=W98)
         return widgets.VBox(children=[
             widgets.Label('-- Size --', layout=W98),
-            self.figHeight,
+            HB(self.figWidth, self.figHeight),   # R4: expose figWidth (drives _compute_fig_size)
             widgets.Label('-- Background --', layout=W98),
             self.figBgColor,
             widgets.Label('-- Axes --', layout=W98),
@@ -293,6 +307,8 @@ class BaseBrowser:
             HB(self.figTickSize, self.figTickColor),
             widgets.Label('-- Legend --', layout=W98),
             HB(self.figLegendSize, self.figLegendColor),
+            # Subclass-specific legend controls (e.g. SXM context legend width)
+            *([getattr(self, 'figCtxLegendW')] if hasattr(self, 'figCtxLegendW') else []),
             self.figFontApplyBtn,
             widgets.Label('-- Templates --', layout=W98),
             self.figTemplateName,
@@ -301,10 +317,6 @@ class BaseBrowser:
             self.figApplyTemplateBtn,
         ], layout=widgets.Layout(visibility='hidden', display='flex',
                                  width='98%', flex_flow='column'))
-
-    # keep old name as alias
-    def _font_settings_tab(self):
-        return self._figure_settings_tab()
 
     @staticmethod
     def _parse_tick_count(val: str) -> int:
@@ -430,9 +442,48 @@ class BaseBrowser:
             self.figTemplateList.value = 'default'
             self._apply_selected_template()
 
-    # keep old name as alias
-    def _connect_font_observers(self) -> None:
-        self._connect_figure_settings_observers()
+    # ------------------------------------------------------------------
+    # Redraw debounce (I1) — shared by both browsers
+    # ------------------------------------------------------------------
+
+    def _schedule_redraw(self, *_, data_dirty: bool = False) -> None:
+        """Debounced entry point for observer callbacks.
+
+        Coalesces rapid widget events (slider drags, toggle bursts) into a
+        single render after a 150 ms quiescence window on the kernel's asyncio
+        loop. Always runs on the main kernel thread, so it is safe from any
+        ipywidgets observe callback. data_dirty=True signals that
+        update_image_data() must run before the render.
+        """
+        if self._loading:
+            return
+        if data_dirty:
+            self._data_dirty = True
+        if self._redraw_handle is not None:
+            self._redraw_handle.cancel()
+            self._redraw_handle = None
+        try:
+            loop = asyncio.get_running_loop()
+            self._redraw_handle = loop.call_later(0.15, self._execute_redraw)
+        except RuntimeError:
+            # No running loop (e.g. during testing) — render immediately
+            self._execute_redraw()
+
+    def _schedule_redraw_dirty(self, *_) -> None:
+        """Convenience observer target for data-reload (tier-3) widgets."""
+        self._schedule_redraw(data_dirty=True)
+
+    def _execute_redraw(self) -> None:
+        """Run after the debounce window; reprocess data if dirty, then redraw."""
+        self._redraw_handle = None
+        try:
+            if self._data_dirty:
+                self._data_dirty = False
+                self.update_image_data()
+            self._redraw()
+        except Exception as err:
+            # asyncio callbacks bypass ipywidgets' handler try/excepts (N19)
+            self.updateErrorText(f'render error: {err}')
 
     def _refresh_info(self, *_) -> None:
         """Tier-2 observer: rebuild title/info text then redraw. No data reprocessing."""
@@ -443,37 +494,111 @@ class BaseBrowser:
         """Return the filename stem (without note or extension) for save_figure."""
         raise NotImplementedError
 
-    def save_figure(self, a) -> None:
-        """Save the current figure to browser_outputs/ as a high-res PNG (requires kaleido)."""
+    def _render_export_bytes(self) -> bytes:
+        """Render the current figure to PNG bytes at scale=1, re-applying colorscale
+        from live widget state.  Single rendering path shared by save_figure and copy_figure.
+
+        FigureWidget.to_dict() omits colorscale when the trace value equals the init-time
+        string (Plotly change-detection no-op).  Explicitly re-applying from cmapSelection
+        after figure reconstruction fixes the SXM colormap export bug.
+        """
+        import plotly.graph_objects as go
+        import plotly.colors as pc
+        fig_dict = self.figure.to_dict()
+        fig_dict.get('layout', {}).pop('template', None)
+        fig_export = go.Figure(fig_dict)
+        fig_export.layout.template = go.layout.Template()
+        fig_export.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+        # Re-apply colorscale from live widget — bypasses to_dict serialisation gaps.
+        if hasattr(self, 'cmapSelection') and fig_export.data:
+            cs = self._resolve_colorscale(self.cmapSelection.value)
+            if isinstance(cs, str):
+                try:
+                    cs = pc.get_colorscale(cs)   # expand to explicit [[pos, rgb], …] list
+                except Exception:
+                    pass                          # keep string if lookup fails
+            rev = getattr(getattr(self, 'reverseScaleToggle', None), 'value', False)
+            for tr in fig_export.data:
+                if getattr(tr, 'type', '') in ('heatmap', 'heatmapgl', 'contour'):
+                    tr.colorscale = cs
+                    tr.reversescale = rev
+        return self._render_png(fig_export)
+
+    def save_figure(self, a=None) -> None:
+        """Save the current figure to browser_outputs/ as a PNG (requires kaleido)."""
         self.saveBtn.icon = 'hourglass-start'
-        out_dir = self.active_dir / 'browser_outputs'
-        out_dir.mkdir(exist_ok=True)
-        dir_name = str(self.directorySelection.value).split(chr(92))[-1]
-        stem = self._figure_stem(dir_name)
-        if self.saveNote.value:
-            stem += f'_{self.saveNote.value}'
-        self.last_save_fname = str(out_dir / f'{stem}.png')
         try:
-            import plotly.graph_objects as go
-            fig_export = go.Figure(self.figure)
-            fig_export.update_layout(paper_bgcolor='rgba(0,0,0,0)',
-                                     plot_bgcolor='rgba(0,0,0,0)')
-            self._last_img_bytes = fig_export.to_image(format='png', scale=5)
+            out_dir = self.active_dir / 'browser_outputs'
+            out_dir.mkdir(exist_ok=True)
+            dir_name = str(self.directorySelection.value).split(chr(92))[-1]
+            stem = self._figure_stem(dir_name)
+            if self.saveNote.value:
+                stem += f'_{self.saveNote.value}'
+            self.last_save_fname = str(out_dir / f'{stem}.png')
+            self._last_img_bytes = self._render_export_bytes()
             Path(self.last_save_fname).write_bytes(self._last_img_bytes)
             self.updateErrorText('Figure Saved')
         except Exception as err:
             self.updateErrorText(f'Save error: {err}')
-        self.saveNote.value = ''
-        self.saveBtn.icon = 'file-image-o'
+        finally:
+            self.saveNote.value = ''
+            self.saveBtn.icon = 'file-image-o'
+
+    # Shared across instances: one browser subprocess for all exports (Concern 5)
+    _kaleido_scope = None
+    _kaleido_hinted: bool = False
+
+    def _render_png(self, fig_export) -> bytes:
+        """Render a figure to PNG bytes, reusing the kaleido browser when possible.
+
+        kaleido 0.x: plotly keeps a module-level PlotlyScope whose Chrome
+        subprocess stays alive for the whole Python session — only the FIRST
+        export pays the ~2 s startup; fig.to_image is already optimal.
+        kaleido 1.x: plotly's default path spawns a fresh Chromium per call
+        (every export slow). Reuse a persistent scope via the 0.x-compatible
+        API when present; otherwise hint once and fall back.
+        """
+        try:
+            import kaleido
+            major = int(str(getattr(kaleido, '__version__', '0')).split('.')[0])
+        except Exception:
+            major = 0
+        if major >= 1:
+            if BaseBrowser._kaleido_scope is None:
+                scope_cls = getattr(getattr(kaleido, 'scopes', None), 'PlotlyScope', None)
+                if scope_cls is not None:
+                    try:
+                        BaseBrowser._kaleido_scope = scope_cls()
+                    except Exception:
+                        pass
+            if BaseBrowser._kaleido_scope is not None:
+                try:
+                    return BaseBrowser._kaleido_scope.transform(
+                        fig_export.to_dict(), format='png', scale=1)
+                except Exception:
+                    BaseBrowser._kaleido_scope = None  # broken scope: rebuild next call
+            if not BaseBrowser._kaleido_hinted:
+                BaseBrowser._kaleido_hinted = True
+                self.updateErrorText(
+                    'kaleido >=1 restarts its browser on every export; '
+                    'install "kaleido<1" for fast repeat copies')
+        return fig_export.to_image(format='png', scale=1)
 
     # ------------------------------------------------------------------
     # Error / status output
     # ------------------------------------------------------------------
 
     def updateErrorText(self, text: str) -> None:
-        """Append *text* to the error log and refresh the output widget."""
+        """Append *text* to the error log and refresh the output widget.
+
+        Auto-expands the Messages accordion so new output is visible; guarded
+        because errors can arrive before _build_main_layout runs (e.g. template
+        load failures during widget construction)."""
         self.errors.append(f'{len(self.errors)} {text}')
         self.errorText.options = self.errors
+        acc = getattr(self, '_error_accordion', None)
+        if acc is not None:
+            acc.selected_index = 0
 
     @staticmethod
     def _status_html(busy: bool, msg: str = 'Processing...') -> str:
@@ -502,12 +627,23 @@ class BaseBrowser:
     # Directory discovery
     # ------------------------------------------------------------------
 
-    def _scan_directory_tree(self, root: Path, _depth: int = 0) -> list:
+    def _scan_directory_tree(self, root: Path, _depth: int = 0,
+                             max_depth: int = 3) -> list:
         """Return [(Path, depth), …] for *root* and every non-skipped
         subdirectory, in pre-order (parent always before its children).
         root itself is depth 0; its immediate children are depth 1, etc.
-        Sorted alphabetically at each level for consistent ordering."""
+        Sorted alphabetically at each level for consistent ordering.
+
+        Recursion is capped at *max_depth* so a deep network share cannot
+        freeze the kernel thread. When the tree is truncated the user is
+        warned once per scan (via the _tree_truncated latch)."""
         result = [(root, _depth)]
+        if _depth >= max_depth:
+            # Truncated: warn once per scan without descending further.
+            if not getattr(self, '_tree_truncated', False):
+                self._tree_truncated = True
+                self.updateErrorText(f'Directory tree truncated at depth {max_depth}')
+            return result
         try:
             children = sorted(
                 (Path(e.path) for e in os.scandir(root)
@@ -517,7 +653,7 @@ class BaseBrowser:
         except PermissionError:
             return result
         for child in children:
-            result.extend(self._scan_directory_tree(child, _depth + 1))
+            result.extend(self._scan_directory_tree(child, _depth + 1, max_depth))
         return result
 
     def _build_tree_options(self, tree: list) -> list:
@@ -562,6 +698,7 @@ class BaseBrowser:
 
     def _refresh_directory_tree(self) -> None:
         """Rescan from active_dir and update self.directories + widget options."""
+        self._tree_truncated = False   # reset per-scan truncation warning latch
         tree = self._scan_directory_tree(self.active_dir)
         self.directories = [path for path, _ in tree]
         self.directorySelection.options = self._build_tree_options(tree)
@@ -571,65 +708,53 @@ class BaseBrowser:
     # ------------------------------------------------------------------
 
     def copy_figure(self, _event=None) -> None:
-        """
-        Save the current figure to disk, then copy it to the Windows clipboard.
-
-        ``save_figure`` caches its rendered PNG bytes in ``self._last_img_bytes``,
-        so this method reuses them for the clipboard — only one kaleido render total.
-
-        Two clipboard strategies are attempted in order:
-
-        1. **win32clipboard** (primary) — writes the PNG bytes directly to the
-           clipboard using the registered PNG format.  Requires ``pywin32``.
-
-        2. **PowerShell fallback** — calls ``Set-Clipboard -Path`` on the file
-           written by ``save_figure``.  10-second timeout; non-zero exit code
-           reported via ``updateErrorText``.
-        """
-        import io
-
+        """Copy the current figure to clipboard.  If saveBtn.value is True (default),
+        also saves to browser_outputs/ as a PNG — controlled by the save toggle."""
         self.copyBtn.icon = 'hourglass-half'
         try:
-            # Disk save — also populates self._last_img_bytes and last_save_fname.
-            self.save_figure(_event)
-
-            # Reuse the bytes already rendered by save_figure (no second kaleido call).
-            buf = io.BytesIO(self._last_img_bytes)
-
-            # ------------------------------------------------------------------
-            # Primary path: win32clipboard — instant, no subprocess
-            # ------------------------------------------------------------------
+            img_bytes = self._render_export_bytes()
+            self._last_img_bytes = img_bytes
+            fname_for_ps = None
+            if getattr(getattr(self, 'saveBtn', None), 'value', True):
+                out_dir = self.active_dir / 'browser_outputs'
+                out_dir.mkdir(exist_ok=True)
+                dir_name = str(self.directorySelection.value).split(chr(92))[-1]
+                stem = self._figure_stem(dir_name)
+                if self.saveNote.value:
+                    stem += f'_{self.saveNote.value}'
+                self.last_save_fname = str(out_dir / f'{stem}.png')
+                Path(self.last_save_fname).write_bytes(img_bytes)
+                fname_for_ps = self.last_save_fname
+                self.updateErrorText('Figure copied and saved')
+            else:
+                self.updateErrorText('Figure copied')
+            # --- clipboard ---
             try:
                 import win32clipboard
-
-                # Use the PNG clipboard format — preserves the alpha channel
-                # and is understood by Word, PowerPoint, Illustrator, etc.
                 fmt_png = win32clipboard.RegisterClipboardFormat('PNG')
                 win32clipboard.OpenClipboard()
                 try:
                     win32clipboard.EmptyClipboard()
-                    win32clipboard.SetClipboardData(fmt_png, self._last_img_bytes)
+                    win32clipboard.SetClipboardData(fmt_png, img_bytes)
                 finally:
                     win32clipboard.CloseClipboard()
-
             except ImportError:
-                # ----------------------------------------------------------
-                # Fallback: PowerShell Set-Clipboard using the saved file path
-                # ----------------------------------------------------------
-                ps_cmd = f'Set-Clipboard -Path "{self.last_save_fname}"'
-                result = subprocess.run(
-                    ['powershell', '-Command', ps_cmd],
-                    capture_output=True,
-                    timeout=10,
-                )
+                # PowerShell fallback needs a file path; write temp if not saved to disk.
+                if fname_for_ps is None:
+                    import tempfile
+                    tmp = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+                    tmp.write(img_bytes); tmp.close()
+                    fname_for_ps = tmp.name
+                ps_cmd = f'Set-Clipboard -Path "{fname_for_ps}"'
+                result = subprocess.run(['powershell', '-Command', ps_cmd],
+                                        capture_output=True, timeout=10)
                 if result.returncode != 0:
                     self.updateErrorText(
-                        f'clipboard error: {result.stderr.decode(errors="replace").strip()}'
-                    )
-
+                        f'clipboard error: {result.stderr.decode(errors="replace").strip()}')
         except Exception as err:
-            self.updateErrorText(f'copy_figure error: {err}')
+            self.updateErrorText(f'copy error: {err}')
         finally:
+            self.saveNote.value = ''
             self.copyBtn.icon = 'clipboard'
 
     # ------------------------------------------------------------------
@@ -656,6 +781,9 @@ class BaseBrowser:
         if os.path.exists(new_root) and os.path.isdir(new_root):
             self.active_dir = Path(new_root)   # must update before resetting directories
             self._refresh_directory_tree()
+        elif new_root:
+            # Silent-on-invalid-path flaw: give the user explicit feedback.
+            self.updateErrorText(f'Invalid session path: {new_root}')
 
         # Restore selection only when a valid refresh was requested
         if current_directory is not None:
@@ -701,10 +829,16 @@ class BaseBrowser:
     # ------------------------------------------------------------------
 
     def _set_settings_visibility(self, visible: bool) -> None:
-        """Show or hide the settings accordion and all its descendant widgets."""
-        import ipywidgets as widgets
+        """Show or hide the settings column.
+
+        Uses display:none/flex (not visibility) so a hidden panel actually
+        collapses and returns its 310 px to the figure instead of leaving a
+        dead column. Descendant visibility is still toggled so the accordion
+        contents show correctly when re-opened.
+        """
+        self.v_settings_layout.layout.display    = 'flex' if visible else 'none'
+        self.v_settings_layout.layout.visibility = 'visible' if visible else 'hidden'
         target = 'visible' if visible else 'hidden'
-        self.v_settings_layout.layout.visibility = target
         for child in self.v_settings_layout.children:
             child.layout.visibility = target
             if hasattr(child, 'children'):

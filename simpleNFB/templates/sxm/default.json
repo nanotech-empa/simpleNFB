@@ -5,7 +5,7 @@
       "font": {
         "family": "Arial"
       },
-      "height": 600,
+      "height": 950,
       "legend": {
         "font": {
           "color": "black",
@@ -17,10 +17,10 @@
       "title": {
         "font": {
           "color": "black",
-          "size": 14
+          "size": 8
         }
       },
-      "width": 600,
+      "width": 950,
       "xaxis": {
         "linecolor": "black",
         "linewidth": 1,
@@ -68,6 +68,7 @@
     "lower_left": "none",
     "lower_right": "scalebar",
     "color": "#ffffff",
-    "font_size": 24
-  }
+    "font_size": 12
+  },
+  "ctx_legend_w": 200
 }

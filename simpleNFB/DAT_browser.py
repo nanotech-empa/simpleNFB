@@ -5,10 +5,10 @@ spectrumBrowser widget for Nanonis DAT spectroscopy data in Jupyter notebooks.
 Uses plotly FigureWidget for rendering (replaces matplotlib).
 '''
 
-import asyncio
 import bisect
 import os
 import re
+import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -25,7 +25,7 @@ from spmpy import Spm
 from .base_browser import BaseBrowser
 from .process_utils import (rebin_intensity_nm_to_ev, smooth_data, group_average,
                              relative_position, despike_z_score, moving_average)
-from .widget_helpers import HBox, VBox, Btn_Widget, Text_Widget, Selection_Widget
+from .widget_helpers import HBox, VBox, Btn_Widget, Text_Widget
 
 # All available colormap names from plotly qualitative and sequential modules
 _QUAL_CMAPS = sorted(n for n in dir(px.colors.qualitative)
@@ -34,6 +34,17 @@ _SEQ_CMAPS  = sorted(n for n in dir(px.colors.sequential)
                      if not n.startswith('_') and isinstance(getattr(px.colors.sequential, n), list))
 _ALL_CMAPS  = _QUAL_CMAPS + _SEQ_CMAPS
 
+# F6: Spm.__init__ mutates the *global* yaml.SafeLoader via add_implicit_resolver
+# on every call. Under ThreadPoolExecutor that is a data race and the resolver
+# list grows unbounded. Serialise object *construction* only; get_channel reads
+# stay parallel.
+_SPM_INIT_LOCK = threading.Lock()
+
+
+def _make_spm(path):
+    """Construct an Spm under the global init lock (F6)."""
+    with _SPM_INIT_LOCK:
+        return Spm(path)
 
 
 class fileBrowser(BaseBrowser):
@@ -63,12 +74,6 @@ class fileBrowser(BaseBrowser):
         'History Data':       '_info_history',
     }
 
-    # Mapping from legacy Dropdown option labels to plotly marker symbols
-    _MARKER_MAP: dict = {
-        'N': None, 'circle': 'circle', 'star': 'star',
-        'square': 'square', 'triangle-up': 'triangle-up', 'x': 'x',
-    }
-
     def __init__(self, width: int = 700, height: int = 550, fontsize: int = 8,
                  titlesize: int = 5, cmap: str = 'greys', home_directory: str = './',
                  sxmBrowser=None) -> None:
@@ -76,8 +81,8 @@ class fileBrowser(BaseBrowser):
         self.img           = None
         self.figure        = go.FigureWidget()
         self._fig_width, self._fig_height = width, height
-        self._setup_figure_autosize(width, height)   # register JS relayout observer
-        self.wfAxes        = None          # external axes hook (optional waterfall)
+        self._connect_relayout_observer()            # register JS relayout observer (R6)
+        self._spm_cache: dict = {}                   # F6: path -> (mtime, Spm)
         self.sxmBrowser    = sxmBrowser
         self.fontsize      = fontsize
         self.titlesize     = titlesize
@@ -106,7 +111,7 @@ class fileBrowser(BaseBrowser):
         self.directories   = [self.active_dir]
         self._scan_cache: dict = {}
         self._auto_condensed: bool = False   # True when Condensed was set automatically
-        self._redraw_handle = None           # asyncio.TimerHandle for debounce
+        self._redraw_handle = None           # TimerHandle for debounce (see BaseBrowser)
         self._data_dirty:   bool = False     # True when update_image_data() must run before next render
 
         # Initial placeholder trace
@@ -165,27 +170,19 @@ class fileBrowser(BaseBrowser):
         self.flattenBtn      = widgets.ToggleButton(description='', value=False, layout=L(30),
                                                     icon='barcode',
                                                     tooltip='Normalize each curve to max=1')
-        self.invertBtn       = widgets.ToggleButton(description='', value=False, layout=L(30),
-                                                    icon='exchange', tooltip='Invert horizontal direction')
         self.fixZeroBtn      = widgets.ToggleButton(description='', value=False, layout=L(30),
                                                     icon='neuter', tooltip='Subtract local baseline')
         self.referenceLocBtn = Btn_Widget('', layout=L(30), icon='map-marker',
                                           tooltip='Plot tip location on image browser')
-        self.saveBtn         = Btn_Widget('', layout=L(30), icon='file-image-o',
-                                          tooltip='Save figure to browser_outputs/')
+        self.saveBtn         = widgets.ToggleButton(
+            value=True, description='', layout=L(30), icon='file-image-o',
+            tooltip='Save to file when copying (toggle off to copy to clipboard only)')
         self.copyBtn         = Btn_Widget('', layout=L(30), icon='clipboard',
-                                          tooltip='Save figure and copy to clipboard')
+                                          tooltip='Copy figure to clipboard')
         self.csvBtn          = Btn_Widget('', layout=L(30), icon='list-ul',
                                           tooltip='Save data to browser_outputs/ as .csv')
-        self.generateWaterFallBtn = Btn_Widget('Waterfall', disabled=True)
-        self.legendBtn       = widgets.ToggleButton(description='', value=True, layout=L(30),
-                                                    icon='tags', tooltip='Toggle legend')
 
-        # offset
-        self.offsetBtn     = widgets.ToggleButton(description='', value=False, layout=L(30),
-                                                   icon='navicon', tooltip='Apply vertical offset')
-        self.offset_value  = widgets.FloatText(value=0.1e-12, description='offset:',
-                                               step=.1e-12, readout_format='.1e', layout=L(120))
+        # R3: generateWaterFallBtn and legacy offset widgets removed (dead code).
 
         # colormap / marker — names from px.colors.qualitative and px.colors.sequential
         _init_seq = self.colorMap in _SEQ_CMAPS or self.colorMap not in _QUAL_CMAPS
@@ -202,11 +199,8 @@ class fileBrowser(BaseBrowser):
             options=['N', 'circle', 'star', 'square', 'triangle-up', 'x'],
             value='circle', layout=FL(98), style={'description_width': '80px'})
 
-        # smoothing (legacy panel kept for UI compat)
-        self.smoothBtn    = widgets.ToggleButton(description='', value=False, layout=L(30),
-                                                  icon='filter', tooltip='Apply Savitzky-Golay filter')
-        self.windowParam  = widgets.BoundedIntText(description='window:', value=3, min=3, max=101, step=2, layout=L(120))
-        self.orderParam   = widgets.BoundedIntText(description='order:', value=1, min=1, max=5, step=1, layout=L(120))
+        # R3: legacy smoothBtn/windowParam/orderParam removed (dead — superseded
+        # by the Filter Settings tab's Savitzky-Golay controls).
 
         # settings panel toggle
         self.settingsBtn = widgets.ToggleButton(description='', icon='gear', value=True,
@@ -358,6 +352,11 @@ class fileBrowser(BaseBrowser):
                                              layout=FL(48), style={'description_width': '28px'})
         self.plot2DVMax = widgets.FloatText(description='max:', value=0, disabled=True,
                                              layout=FL(48), style={'description_width': '28px'})
+        # Header inspector (Concern 4): key list + read-only value
+        self.headerKeySelect = widgets.Select(options=[], rows=8, layout=FL(98))
+        self.headerValueText = widgets.Textarea(
+            value='', disabled=True, rows=6, layout=FL(98))
+
         self._build_figure_settings_widgets(self._fig_width, self._fig_height)
 
     def _build_layout(self) -> None:
@@ -373,7 +372,8 @@ class fileBrowser(BaseBrowser):
             self.flattenBtn, self.fixZeroBtn, self.referenceLocBtn],
             layout=FL(98))
         self.h_selection_btn_layout = HBox(children=[
-            self.refreshBtn, self.csvBtn, self.saveBtn, self.copyBtn, self.codeBtn, self.settingsBtn],
+            self.refreshBtn, self.csvBtn, self.saveBtn, self.copyBtn,
+            self.codeBtn, self.settingsBtn],
             layout=FL(98))
         self.v_channel_layout = VBox(children=[
             self.channelXSelect, self.channelYSelect, self.saveNote], layout=FL(48))
@@ -382,7 +382,7 @@ class fileBrowser(BaseBrowser):
             self.directorySelection,
             widgets.Label('Files', layout=FL(50)),
             self.selectionList,
-            self.v_filter_layout],
+            self.v_filter_layout],      # errorText moved to full-width Messages accordion
             layout=FL(98))
         self.v_btn_layout = VBox(children=[
             self.h_selection_btn_layout, self.h_process_layout,
@@ -444,12 +444,21 @@ class fileBrowser(BaseBrowser):
                 self.xLimitsMin, self.xLimitsMax,
                 HBox(children=[self.xLimitsBtn, self.xLimitLock], layout=FL(98)),
             ], layout=FLH(98)),
+            VBox(children=[
+                widgets.Label('Header key', layout=FL(98)),
+                self.headerKeySelect,
+                widgets.Label('Value', layout=FL(98)),
+                self.headerValueText,
+            ], layout=FLH(98)),
             self._figure_settings_tab(),
         ], layout=FLH(98),
         titles=['Legend Settings', 'Title Settings', 'Filter Settings',
-                'STML Mode', '2D Plot', '1D Plot', 'Figure Settings'])
+                'STML Mode', '2D Plot', '1D Plot', 'Header', 'Figure Settings'])
 
-        # FigureWidget is itself a widget — use self.figure directly (no .canvas wrapper)
+        # FigureWidget is itself a widget — use self.figure directly (no .canvas wrapper).
+        # Keep default align_items='stretch': plotly autosize=True measures the
+        # stretched container div, so the figure fills the column; centring would
+        # collapse the div width (FigureWidget exposes no CSS layout to pin it).
         self.v_image_layout = VBox(children=[
             self.figure, self.h_user_layout],
             layout=widgets.Layout(display='flex', flex_flow='column'))
@@ -515,10 +524,8 @@ class fileBrowser(BaseBrowser):
         self.xScaleMode.observe(self._toggle_formula_visibility, names='value')
         self.yScaleMode.observe(self._toggle_formula_visibility, names='value')
 
-        self.saveBtn.on_click(self.save_figure)
         self.copyBtn.on_click(self.copy_figure)
         self.csvBtn.on_click(self.save_data)
-        self.generateWaterFallBtn.on_click(self.generateWaterFall)
         self.refreshBtn.on_click(self.handler_root_folder_update)
 
         self.referenceLocBtn.on_click(self.plotSpectrumLocations)
@@ -529,10 +536,7 @@ class fileBrowser(BaseBrowser):
                   self.plot2DVMin, self.plot2DVMax):
             w.observe(self._schedule_redraw, names='value')
 
-        # legacy smoothing widgets (not in layout; tier-2 for compat)
-        for w in (self.smoothBtn, self.windowParam, self.orderParam,
-                  self.offsetBtn, self.offset_value):
-            w.observe(self.handler_update_axes, names='value')
+        # R3: legacy smoothing/offset observer block removed (widgets deleted).
 
         # plasmonReference: single observer only — loads file then redraws
         self.plasmonReference.observe(self.handler_update_plasmonic_reference, names='value')
@@ -545,6 +549,7 @@ class fileBrowser(BaseBrowser):
         self.addFilterBtn.on_click(self.handler_update_filters)
         self.channelXSelect.observe(self.handler_channel_selection, names='value')
         self.channelYSelect.observe(self.handler_channel_selection, names=['value'])
+        self.headerKeySelect.observe(self._on_header_key_select, names='value')
 
         self._connect_figure_settings_observers()
 
@@ -564,39 +569,8 @@ class fileBrowser(BaseBrowser):
         self.cmapSelection.options = opts
         self.cmapSelection.value   = cur if cur in opts else opts[0]
 
-    def _schedule_redraw(self, *_, data_dirty: bool = False) -> None:
-        """Debounced entry point for observer callbacks.
-
-        Schedules a render on the kernel's asyncio event loop after a 150 ms
-        quiescence window. Safe to call from any ipywidgets observe callback
-        because it always runs on the main kernel thread.
-        data_dirty=True signals that update_image_data() must run first.
-        """
-        if self._loading:
-            return
-        if data_dirty:
-            self._data_dirty = True
-        if self._redraw_handle is not None:
-            self._redraw_handle.cancel()
-            self._redraw_handle = None
-        try:
-            loop = asyncio.get_running_loop()
-            self._redraw_handle = loop.call_later(0.15, self._execute_redraw)
-        except RuntimeError:
-            # No running loop (e.g. during testing) — render immediately
-            self._execute_redraw()
-
-    def _schedule_redraw_dirty(self, *_) -> None:
-        """Convenience observer target for Tier 3 (data-reload) widgets."""
-        self._schedule_redraw(data_dirty=True)
-
-    def _execute_redraw(self) -> None:
-        """Executes after the debounce window on the kernel's event loop."""
-        self._redraw_handle = None
-        if self._data_dirty:
-            self._data_dirty = False
-            self.update_image_data()
-        self._redraw()
+    # _schedule_redraw / _schedule_redraw_dirty / _execute_redraw now live in
+    # BaseBrowser (I1) so SXM shares the same 150 ms debounce.
 
     def _redraw(self, *_) -> None:
         """Route to 2D or 1D rendering; FigureWidget updates reactively."""
@@ -609,16 +583,16 @@ class fileBrowser(BaseBrowser):
         finally:
             self._set_busy(False)
 
-    def _title_top_margin(self) -> int:
-        """Top margin (px) sized so the title never overlaps the plot area."""
-        n_lines = (self.spec_label.count('<br>') + 1) if self.spec_label else 0
-        return max(100,int(n_lines * self.figTitleSize.value * 1.5) + 20)
-
     def _apply_figure_title(self) -> None:
-        """Set figure title text, font and top margin from current spec_label."""
-        self.figure.update_layout(
-            title=dict(text=self.spec_label, font=dict(size=self.figTitleSize.value), x=0,y=0.1,yref='container',xref='paper',yanchor='bottom',automargin=True),)
-            #margin=dict(b=self._title_top_margin()),)
+        """Set figure title text and font; automargin reserves the space (I5).
+
+        Anchored at y=0.1 in container coords with automargin=True, so plotly
+        sizes the margin to the title — no hand-tuned pixel margin needed.
+        """
+        self.figure.update_layout(title=dict(
+            text=self.spec_label, font=dict(size=self.figTitleSize.value),
+            x=0, y=0.1, yref='container', xref='paper',
+            yanchor='bottom', automargin=True))
 
     def _update_title(self, *_) -> None:
         """Patch figure title and top margin in-place; no trace rebuild."""
@@ -647,9 +621,9 @@ class fileBrowser(BaseBrowser):
                 # Separate real data traces from the condensed-mode colorbar dummy
                 # (dummy has x=[None]; must not be included in colour sampling)
                 data_tr  = [t for t in self.figure.data
-                            if t.x is not None and t.x[0] is not None]
+                            if t.x is not None and len(t.x) > 0 and t.x[0] is not None]
                 dummy_tr = [t for t in self.figure.data
-                            if t.x is None or t.x[0] is None]
+                            if t.x is None or len(t.x) == 0 or t.x[0] is None]
                 n = len(data_tr)
                 colors = px.colors.sample_colorscale(
                     colorscale, self._color_positions(n))
@@ -680,19 +654,23 @@ class fileBrowser(BaseBrowser):
     def save_data(self, a) -> None:
         """Save current spectra to browser_outputs/ as CSV."""
         self.csvBtn.icon = 'hourglass-start'
-        out_dir = self.active_dir / 'browser_outputs'
-        out_dir.mkdir(exist_ok=True)
-        stem = (f'{str(self.directorySelection.value).split(chr(92))[-1]}'
-                f'_{self.spec[0].name.split(".")[0]}_{self.channelYSelect.value[0]}')
-        if self.saveNote.value:
-            stem += f'_{self.saveNote.value}'
-        fname = out_dir / stem
-        x_hdr = f'{self.spec_info[0]["x_label"]} ({self.spec_info[0]["x_unit"]})'
-        header = ','.join(f'{x_hdr},{lbl[:-4]}' for lbl in self.labels)
-        out = np.column_stack([arr for pair in zip(self.spec_x, self.spec_data) for arr in pair])
-        np.savetxt(f'{fname}.csv', out, delimiter=',', header=header)
-        self.updateErrorText('Saved CSV')
-        self.csvBtn.icon = 'list-ul'
+        try:
+            out_dir = self.active_dir / 'browser_outputs'
+            out_dir.mkdir(exist_ok=True)
+            stem = (f'{str(self.directorySelection.value).split(chr(92))[-1]}'
+                    f'_{self.spec[0].name.split(".")[0]}_{self.channelYSelect.value[0]}')
+            if self.saveNote.value:
+                stem += f'_{self.saveNote.value}'
+            fname = out_dir / stem
+            x_hdr = f'{self.spec_info[0]["x_label"]} ({self.spec_info[0]["x_unit"]})'
+            header = ','.join(f'{x_hdr},{lbl.removesuffix(".dat")}' for lbl in self.labels)
+            out = np.column_stack([arr for pair in zip(self.spec_x, self.spec_data) for arr in pair])
+            np.savetxt(f'{fname}.csv', out, delimiter=',', header=header)
+            self.updateErrorText('Saved CSV')
+        except Exception as err:
+            self.updateErrorText(f'CSV save error: {err}')
+        finally:
+            self.csvBtn.icon = 'list-ul'
 
     # ------------------------------------------------------------------
     # Image generation
@@ -712,27 +690,63 @@ class fileBrowser(BaseBrowser):
         if filename is None:
             files = [os.path.join(directory, self.dat_files[idx])
                      for idx in self.spec_index]
-            with ThreadPoolExecutor(max_workers=min(len(files), 8)) as ex:
-                self.spec = list(ex.map(Spm, files))
+            self.spec = self._load_spec_cached(files)   # F6: reuse cached Spm objects
             self.filenameText.value = ','.join(
-                self.all_files[idx] for idx in self.spec_index)
+                self.dat_files[idx] for idx in self.spec_index)
             self.loaded_experiments = [s.header['Experiment'] for s in self.spec]
             self._scan_cache = {}
+            self._populate_header_inspector()  # Concern 4: header key list
             self._loading = True
             self._update_channel_selection()   # channel observers suppressed
             self._loading = False
         else:
-            return Spm(os.path.join(directory, filename))
+            return _make_spm(os.path.join(directory, filename))
+
+    def _load_spec_cached(self, files: list) -> list:
+        """Return Spm objects for *files*, reusing cache entries when mtime matches.
+
+        Only cache misses hit the disk/network; misses are constructed in
+        parallel but each under the global init lock (F6). The cache is then
+        pruned to just the current selection so it stays bounded.
+        """
+        results: dict = {}
+        misses: list = []
+        for path in files:
+            try:
+                mt = os.path.getmtime(path)
+            except OSError:
+                mt = None
+            cached = self._spm_cache.get(path)
+            if cached is not None and mt is not None and cached[0] == mt:
+                results[path] = cached[1]     # fresh cache hit — no re-read
+            else:
+                misses.append((path, mt))
+        if misses:
+            with ThreadPoolExecutor(max_workers=min(len(misses), 8)) as ex:
+                loaded = list(ex.map(_make_spm, [p for p, _ in misses]))
+            for (path, mt), obj in zip(misses, loaded):
+                results[path] = obj
+                if mt is not None:
+                    self._spm_cache[path] = (mt, obj)
+        # Evict entries no longer in the current selection (keep cache bounded)
+        for stale in [p for p in self._spm_cache if p not in files]:
+            del self._spm_cache[stale]
+        return [results[p] for p in files]
 
     def smooth_data(self, data):
         """Apply Savitzky-Golay filter using current widget params."""
         return smooth_data(data, self.svgSize.value, self.svgOrder.value)
 
-    def _cache_scan_param(self, spec, key: str):
-        """Return spec.get_param(key) with per-file caching."""
+    def _cache_scan_param(self, spec, key: str, default=('N/A', '')):
+        """Return spec.get_param(key) with per-file caching.
+
+        Returns *default* when get_param returns None (missing header key) so
+        callers can safely index result[0]/result[1] without a TypeError.
+        """
         cache_key = (id(spec), key)
         if cache_key not in self._scan_cache:
-            self._scan_cache[cache_key] = spec.get_param(key)
+            val = spec.get_param(key)
+            self._scan_cache[cache_key] = val if val is not None else default
         return self._scan_cache[cache_key]
 
     def update_image_data(self) -> None:
@@ -770,7 +784,15 @@ class fileBrowser(BaseBrowser):
                 self.spec_info.append({'x_unit': shared_xunit, 'y_unit': yunit, 'x_label': channelX})
                 self.spec_x.append(shared_x)
                 self.labels.append(ch)
-        self.update_scan_info()
+        # Notify on the case that produces a silent blank plot
+        elif len(self.selectionList.value) > 1 and len(channelY) > 1:
+            self.updateErrorText(
+                'Select 1 file with multiple Y channels, OR multiple files with 1 Y channel.')
+        try:
+            self.update_scan_info()
+        except Exception as err:
+            # Bad/missing header keys must not prevent the plot from rendering
+            self.updateErrorText(f'Header read error: {err}')
 
         # STML normalization
         if self.stmlToggle.value and 'stml' in (self.loaded_experiments or [''])[0].lower():
@@ -958,7 +980,12 @@ class fileBrowser(BaseBrowser):
                 labels = [spec.header[self.parameterLegendList.value] for spec in self.spec]
                 param = self.parameterLegendList.value
                 for i, val in enumerate(labels):
-                    v = float(val)
+                    try:
+                        v = float(val)
+                    except (ValueError, TypeError):
+                        # Non-numeric header value: show it verbatim, skip formatting.
+                        labels[i] = str(val)
+                        continue
                     if 'z' in param[0].lower():
                         labels[i] = f'{v * 1e9:.2f} nm'
                     elif 'current' in param.lower():
@@ -1212,12 +1239,6 @@ class fileBrowser(BaseBrowser):
     # Alternate views
     # ------------------------------------------------------------------
 
-    def generateWaterFall(self, a=None) -> None:
-        """Switch to 2D view with Position (nm) on the Y-axis (waterfall)."""
-        self.plot2DToggle.value = True
-        self.plot2DYParam.value = 'Position (nm)'
-        self._redraw()
-
     def plotSpectrumLocations(self, a) -> None:
         """Overlay tip positions as scatter markers on the linked SXM browser."""
         if self.sxmBrowser is None or self.sxmBrowser.img is None:
@@ -1380,6 +1401,22 @@ class fileBrowser(BaseBrowser):
             self.channelYSelect.value = [self.spec[0].channels[0]]
         self.current_experiment = exp
 
+    def _populate_header_inspector(self) -> None:
+        """Fill the header key Select from the first loaded spectrum (Concern 4)."""
+        if not self.spec:
+            return
+        keys = list(self.spec[0].header.keys())
+        self.headerKeySelect.options = keys
+        if keys:
+            self.headerKeySelect.value = keys[0]
+            self.headerValueText.value = str(self.spec[0].header[keys[0]])
+
+    def _on_header_key_select(self, change) -> None:
+        """Show the selected header key's value in the read-only Textarea."""
+        if not self.spec or change['new'] is None:
+            return
+        self.headerValueText.value = str(self.spec[0].header.get(change['new'], ''))
+
     def _update_info_text(self) -> None:
         idx = self.spec_index[0]
         self.filenameText.value  = self.dat_files[idx]
@@ -1434,7 +1471,7 @@ class fileBrowser(BaseBrowser):
 
     def nextDisplay(self, a) -> None:
         idx = self.spec_index[-1]
-        if idx < len(self.all_files) - 1:
+        if idx < len(self.dat_files) - 1:
             self.spec_index = [idx + 1]
             self._loading = True
             self._update_info_text()   # sync UI; handler_file_selection suppressed
@@ -1765,8 +1802,8 @@ class fileBrowser(BaseBrowser):
         self._set_busy(True, 'Scanning folder...')
         try:
             index = 0
-            if type(a) == type(self.refreshBtn):
-                index = self.selectionList.index
+            # I4: no refreshBtn branch — refreshBtn is wired to
+            # handler_root_folder_update, never to this handler.
             directory = self.directories[self.directorySelection.index]
             filter_vals = self.filterSelection.value
             self.sxm_files = []
@@ -1785,8 +1822,7 @@ class fileBrowser(BaseBrowser):
             self._loading = True
             self.selectionList.options = self.dat_files
             if self.dat_files:
-                first = (self.dat_files[index] if isinstance(index, int)
-                         else self.dat_files[index[0]])
+                first = self.dat_files[index]
                 self.filenameText.value = first
                 self.selectionList.value = [first]
                 self.plasmonReference.options = (
@@ -1844,7 +1880,7 @@ class fileBrowser(BaseBrowser):
         if directory != self.active_dir:
             directory = os.path.join(self.active_dir, directory)
         if self.plasmonReference.value in self.dat_files:
-            ref = Spm(os.path.join(directory, self.plasmonReference.value))
+            ref = _make_spm(os.path.join(directory, self.plasmonReference.value))
             ref_y, _ = ref.get_channel('Intensity')
             ref_x, _ = ref.get_channel('Wavelength')
             ref_y = abs(savgol_filter(ref_y, 21, 1))
@@ -1862,6 +1898,8 @@ class fileBrowser(BaseBrowser):
         result = []
         for arr in data_list:
             ns[var] = arr
+            # trusted input only — formula comes from the user's own
+            # xCustomFormula/yCustomFormula widget in a local lab session.
             result.append(np.asarray(eval(formula, ns)))  # noqa: S307
         return result
 
@@ -1873,10 +1911,6 @@ class fileBrowser(BaseBrowser):
             self.xCustomFormula.layout.display = display_val
         elif change['owner'] is self.yScaleMode:
             self.yCustomFormula.layout.display = display_val
-
-    def handler_update_axes(self, a) -> None:
-        self.update_scan_info()
-        self._redraw()
 
     def handler_update_axes_limits(self, a) -> None:
         if a == self.xLimitsBtn:
@@ -1929,7 +1963,7 @@ class fileBrowser(BaseBrowser):
         filter : bool
             When True and averaging is active, return one value per group.
         """
-        return [self._get_scan_info(s, key) for s in self._get_spec_selection(filter=filter)]
+        return [self._cache_scan_param(s, key) for s in self._get_spec_selection(filter=filter)]
 
     def get_channel(self, channel: str, filter: bool = False) -> list:
         """Return raw channel data arrays for each spectrum in the current selection.

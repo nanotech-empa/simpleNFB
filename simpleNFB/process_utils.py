@@ -14,7 +14,6 @@ Functions:
 
 import numpy as np
 from scipy.signal import savgol_filter, medfilt
-from scipy.interpolate import interp1d
 
 
 def rebin_intensity_nm_to_ev(wavelengths, intensities):
