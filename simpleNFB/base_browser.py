@@ -92,7 +92,7 @@ class BaseBrowser:
         self.filenameText = Text_Widget('')
         self.errorText    = Selection_Widget([], 'Out:', rows=5)
         # Lives in the full-width Messages accordion (see _build_main_layout)
-        self.errorText.layout.width = '98%'
+        self.errorText.layout.width = '95%'
 
     def _build_main_layout(self, file_col, img_col, session_label_width: int = 5) -> None:
         """Assemble the top-level 3-column layout and set it as self.h_main_layout.
@@ -130,7 +130,7 @@ class BaseBrowser:
         # Collapsed by default (selected_index=None); opened by updateErrorText
         self._error_accordion = widgets.Accordion(
             children=[self.errorText], titles=['Messages'], selected_index=None,
-            layout=widgets.Layout(width='100%'))
+            layout=widgets.Layout(width='98%'))
 
         _row = widgets.Layout(display='flex', flex_flow='row',
                               width='100%', align_items='stretch')

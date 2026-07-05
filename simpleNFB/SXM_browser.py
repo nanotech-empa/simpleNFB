@@ -106,10 +106,7 @@ class fileBrowser(BaseBrowser):
         self.channelSelect = widgets.Dropdown(description='', layout=L(165))
         self.refreshBtn = Btn_Widget(
             '', icon='refresh', tooltip='Reload file list', layout=FLB(24))
-        self.saveNote     = Text_Widget(
-            '', description='',
-            tooltip='This text is appended to filename when the figure is saved',
-            layout=FL(99))
+        self.saveNote     = Text_Widget('', description='',tooltip='This text is appended to filename when the figure is saved',layout=FL(99))
 
         # image controls
         self.nextBtn      = Btn_Widget('', layout=L(40), icon='arrow-circle-down',
