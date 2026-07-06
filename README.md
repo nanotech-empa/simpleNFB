@@ -25,11 +25,13 @@ Jupyter notebook. `spmpy` and its dependencies are installed automatically.
 
 ### Standard install
 
-```pip
+```
+[option 1 -- pip]
 pip install git+https://github.com/nanotech-empa/simpleNFB
 ```
 
-```github download + pip install
+```
+[option 2 -- github download + pip install]
 download from zip file from https://github.com/nanotech-empa/simpleNFB
 extract files
 open cmd prompt
@@ -41,7 +43,8 @@ open cmd prompt
     pip install .
 ```
 
-```git + bash
+```
+[option 3 -- git + bash]
 git clone https://github.com/nanotech-empa/simpleNFB.git
 cd simpleNFB
 pip install .
