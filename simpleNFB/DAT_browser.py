@@ -496,7 +496,7 @@ class fileBrowser(BaseBrowser):
         # The ipympl Canvas is itself a widget — embed it directly.
         self.v_image_layout = VBox(children=[
             self.canvas, self.h_user_layout],
-            layout=widgets.Layout(display='flex', flex_flow='column'))
+            layout=widgets.Layout(display='flex', flex_flow='column', justify_content='center', align_items='center', width='100%' ))
         self._build_main_layout(self.v_file_select_layout, self.v_image_layout, 5)
 
         # Output panel for code export — embedded in layout so it works in VS Code too
