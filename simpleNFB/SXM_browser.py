@@ -2,7 +2,7 @@
 SXM_browser.py
 --------------
 imageBrowser widget for Nanonis SXM scan data in Jupyter notebooks.
-Uses plotly FigureWidget for rendering (replaces matplotlib).
+Renders with matplotlib on the ipympl (widget) backend.
 '''
 
 import os
@@ -10,9 +10,8 @@ import traceback
 from pathlib import Path
 
 import ipywidgets as widgets
+import matplotlib as mpl
 import numpy as np
-import plotly.express as px
-import plotly.graph_objects as go
 from IPython import display
 from scipy.ndimage import gaussian_filter, gaussian_laplace, median_filter
 
@@ -21,13 +20,21 @@ from .base_browser import BaseBrowser
 from .process_utils import relative_position, remove_line_average
 from .widget_helpers import HBox, VBox, Btn_Widget, Text_Widget
 
+# All non-reversed colormap names; the reverse toggle appends '_r' at resolve time.
+_CMAP_NAMES = sorted((n for n in mpl.colormaps if not n.endswith('_r')),
+                     key=str.lower)
+
+# Qualitative colors for context markers (matplotlib tab10 ≈ plotly qualitative)
+_CTX_COLORS = [mpl.colormaps['tab10'](i) for i in range(10)]
+
 
 class fileBrowser(BaseBrowser):
     '''
     Interactive browser for Nanonis SXM image data.
 
     Public attributes:
-        figure      – plotly FigureWidget (go.FigureWidget with a Heatmap trace)
+        figure      – matplotlib Figure (self.canvas is the ipympl widget)
+        ax          – main Axes (self._im is the AxesImage)
         image_data  – ndarray of current processed image
         img         – Spm object for the loaded file
 
@@ -39,7 +46,7 @@ class fileBrowser(BaseBrowser):
 
     # Pixels permanently reserved in the right margin for the context legend
     # column. Baking this in keeps the plot box constant regardless of whether
-    # context markers are shown, so scaleanchor aspect ratio never reflows.
+    # context markers are shown, so the aspect ratio never reflows.
     _CTX_LEGEND_W = 130
 
     _TEMPLATES_SUBDIR: str = 'sxm'
@@ -58,13 +65,20 @@ class fileBrowser(BaseBrowser):
         _cmap_lower = cmap.lower()
         _reversed   = _cmap_lower.endswith('_r')
         _cmap_base  = _cmap_lower[:-2] if _reversed else _cmap_lower
-        _available  = px.colors.named_colorscales()
-        self._cmap  = _cmap_base if _cmap_base in _available else 'greys'
+        self._cmap  = next((n for n in _CMAP_NAMES if n.lower() == _cmap_base),
+                           'Greys')
 
         # --- state ---
         self.img = None
-        self.figure = go.FigureWidget(data=[go.Heatmap(
-            z=[[0]], colorscale=self._cmap, reversescale=_reversed)])
+        self._make_figure(width, height)             # figure / canvas / ax
+        self._im   = self.ax.imshow(np.zeros((64, 64)),
+                                    cmap=self._resolve_cmap(self._cmap, _reversed),
+                                    aspect='equal')
+        self._cbar = self._cax = None
+        self._overlay_artists: list = []   # DAT tip-location markers (see DAT browser)
+        self._label_artists:   list = []   # corner labels + scalebar
+        self._ctx_artists:     list = []   # context marker Line2Ds
+        self._ctx_texts:       list = []   # context legend fig.texts
         self._fig_width, self._fig_height = width, height
         self._last_crop = (1.0, 1.0)  # (h_crop, w_crop) updated on each image load
         self.fontsize  = fontsize
@@ -97,7 +111,6 @@ class fileBrowser(BaseBrowser):
     def _build_widgets(self, reversed_scale: bool = True) -> None:
         """Instantiate all ipywidgets; no observers set here."""
         L, FL, FLB, FLH = self._layout_helpers()
-        self._L = L
         self._build_common_file_widgets()
 
         # selections
@@ -106,13 +119,11 @@ class fileBrowser(BaseBrowser):
         self.channelSelect = widgets.Dropdown(description='', layout=L(165))
         self.refreshBtn = Btn_Widget(
             '', icon='refresh', tooltip='Reload file list', layout=FLB(24))
-        self.saveNote     = Text_Widget('', description='',tooltip='This text is appended to filename when the figure is saved',layout=FL(99))
+        self.saveNote     = Text_Widget('', description='',
+                                        tooltip='This text is appended to filename when the figure is saved',
+                                        layout=FL(99))
 
         # image controls
-        self.nextBtn      = Btn_Widget('', layout=L(40), icon='arrow-circle-down',
-                                       tooltip='Load next image in list')
-        self.previousBtn  = Btn_Widget('', layout=L(40), icon='arrow-circle-up',
-                                       tooltip='Load previous image in list')
         self.linebylineBtn = widgets.ToggleButton(
             description='', value=False, layout=L(40), icon='align-justify',
             tooltip='Line by line linear subtraction')
@@ -146,13 +157,13 @@ class fileBrowser(BaseBrowser):
             '', layout=FLB(24), icon='file-code-o',
             tooltip='Export reproducible Python code to clipboard/new cell')
 
-        # Header inspector (Concern 4): key list + read-only value
+        # Header inspector: key list + read-only value
         self.headerKeySelect = widgets.Select(options=[], rows=8, layout=FL(98))
         self.headerValueText = widgets.Textarea(
             value='', disabled=True, rows=6, layout=FL(98))
 
-        # Session timeline context (Concern 4): show .dat files taken between
-        # this image's mtime and the next image's mtime.
+        # Session timeline context: show .dat files taken between this image's
+        # mtime and the next image's mtime.
         self.contextToggle = widgets.ToggleButton(
             value=False, description='Context', icon='clock-o', layout=FLB(48),
             tooltip='Show .dat files recorded during this image')
@@ -161,7 +172,6 @@ class fileBrowser(BaseBrowser):
             layout=widgets.Layout(display='none', width='98%'))
         self.session_index: list = []   # [(name, kind, mtime)] built during folder scan
         # Width (px) reserved in the right margin for the context legend column.
-        # Exposed as a widget so the user can tune it and save it into a template.
         self.figCtxLegendW = widgets.BoundedIntText(
             value=self._CTX_LEGEND_W, min=0, max=400, description='Ctx legend W:',
             tooltip='Pixels reserved in the right margin for the context marker legend',
@@ -175,7 +185,7 @@ class fileBrowser(BaseBrowser):
             value=1, description='Max:', step=.1,
             layout=FL(50), style={'description_width': '40px'})
         self.cmapSelection = widgets.Dropdown(
-            description='Color Map:', options=px.colors.named_colorscales(),
+            description='Color Map:', options=_CMAP_NAMES,
             value=self._cmap,
             layout=FL(99), style={'description_width': '77px'})
         self.reverseScaleToggle = widgets.ToggleButton(
@@ -267,7 +277,7 @@ class fileBrowser(BaseBrowser):
                 HBox(children=[self.refreshBtn, self.saveBtn, self.copyBtn, self.codeBtn,
                                self.configOptionBtn]),
                 widgets.Label('Note')]),
-            self.saveNote],        # errorText moved to full-width Messages accordion
+            self.saveNote],
             layout=FL(98))
         self.v_settings_layout = widgets.Accordion(children=[
             VBox(children=[
@@ -307,13 +317,11 @@ class fileBrowser(BaseBrowser):
         ], layout=FLH(98),
         titles=['Label Settings', 'Title Settings', 'Filter Settings',
                 'Header', 'Figure Settings'])
-        # FigureWidget is itself a widget — no Output wrapper needed.
-        # align_items='center'    — centres the fixed-px figure horizontally
-        #   (works now that widget_helpers.VBox no longer overwrites it).
-        # justify_content='center' — centres figure+controls vertically in the
-        #   column, which is stretched to the height of the tall file list.
+        # The ipympl Canvas is itself a widget — embed it directly.
+        # align_items='center' centres the fixed-px figure horizontally;
+        # justify_content='center' centres it vertically in the tall column.
         self.v_image_layout = VBox(
-            children=[self.figure, self.h_user_layout],
+            children=[self.canvas, self.h_user_layout],
             layout=widgets.Layout(display='flex', flex_flow='column',
                                   align_items='center',
                                   justify_content='center',
@@ -325,8 +333,7 @@ class fileBrowser(BaseBrowser):
 
     def _connect_observers(self) -> None:
         """Wire all observe() and on_click() callbacks."""
-        # Tier 1 — cosmetic only (I2): patch colorscale/limits/labels in-place.
-        # _update_display never re-ships z/x/y over the comm.
+        # Tier 1 — cosmetic only (I2): patch clim/cmap/labels in-place.
         for w in (self.labelToggle,
                   self.upperLeftSelect, self.upperRightSelect,
                   self.lowerLeftSelect, self.lowerRightSelect,
@@ -335,7 +342,6 @@ class fileBrowser(BaseBrowser):
             w.observe(self._update_display, names='value')
 
         # Tier 2 — rebuild title text then redraw (no filter pipeline)
-        # titleToggle lives here so update_scan_info runs before update_axes reads scan_info
         for w in (self.titleToggle, self.channelToggle, self.setpointToggle,
                   self.feedbackToggle, self.locationToggle, self.depthSelection,
                   self.nameToggle, self.directionToggle, self.dateToggle):
@@ -370,9 +376,8 @@ class fileBrowser(BaseBrowser):
         self.vmin.observe(self._on_limits_change, names='value')
         self.vmax.observe(self._on_limits_change, names='value')
 
-        self.nextBtn.on_click(self.nextDisplay)
-        self.previousBtn.on_click(self.previousDisplay)
         self.refreshBtn.on_click(self.handler_root_folder_update)
+        self.refreshBtn.on_click(self.handler_folder_selection)
         self.directorySelection.observe(self.handler_folder_selection, names='value')
         self.selectionList.observe(self.handler_file_selection, names='value')
         self.channelSelect.observe(self.handler_channel_selection, names='value')
@@ -389,61 +394,67 @@ class fileBrowser(BaseBrowser):
         display.display(self.h_main_layout)
 
     def _redraw(self, *_) -> None:
-        """Update axes; FigureWidget updates reactively — no canvas.draw() needed."""
+        """Full rebuild then the single canvas draw (§7 single render)."""
         self._set_busy(True, 'Rendering...')
         try:
             self.update_axes()
+            self._export_dirty = True
+            self.canvas.draw_idle()
         finally:
             self._set_busy(False)
 
     def _on_limits_change(self, _) -> None:
         """Callback for vmin/vmax changes; skipped during batch limit updates.
 
-        vmin/vmax are cosmetic (zmin/zmax on the existing trace), so patch
-        in-place via _update_display rather than re-shipping the heatmap (I2).
-        """
+        vmin/vmax are cosmetic (set_clim on the existing image), so patch
+        in-place via _update_display rather than rebuilding (I2)."""
         if not self._updating_limits:
             self._update_display()
 
     def _update_display(self, *_) -> None:
-        """Patch cosmetic props on the existing heatmap in-place (I2).
+        """Patch cosmetic props on the existing image in-place (I2).
 
         Handles colormap, reverse, vmin/vmax, colorbar ticks, axis-label
-        visibility and corner-label annotations without re-sending z/x/y.
-        Falls back to a full _redraw when no image is loaded yet.
-        """
+        visibility and corner labels without re-shipping the image data.
+        Falls back to a full _redraw when no image is loaded yet."""
         if self._loading:
             return
-        if self.img is None or not self.figure.data:
+        if self.img is None or self._im is None:
             self._redraw()
             return
         vmin, vmax = self.vmin.value, self.vmax.value
-        channel = self.channelSelect.value
-        unit    = self.image_info['unit']
         h_crop, w_crop = self._last_crop
-        with self.figure.batch_update():
-            hm = self.figure.data[0]
-            hm.zmin       = vmin
-            hm.zmax       = vmax
-            hm.colorscale = self._resolve_colorscale(self.cmapSelection.value)
-            hm.reversescale = self.reverseScaleToggle.value
-            hm.colorbar = dict(
-                title=dict(text=f'{channel} ({unit})', side='right'),
-                thickness=12, len=1.0, lenmode='fraction',
-                y=0.5, yanchor='middle',
-                tickvals=[vmin, vmax],
-                ticktext=[f'{vmin:.2f}', f'{vmax:.2f}'],
-            )
-            show_axes = not self.labelToggle.value
-            self.figure.layout.xaxis.visible = show_axes
-            self.figure.layout.yaxis.visible = show_axes
-        # Corner labels patched separately (also in-place via batch_update)
+        self._im.set_clim(vmin, vmax)
+        self._im.set_cmap(self._resolve_cmap(self.cmapSelection.value,
+                                             self.reverseScaleToggle.value))
+        self._update_colorbar(vmin, vmax)
+        self._set_axis_visibility()
+        # Corner labels re-rendered in place
+        self._clear_label_artists()
         if self.labelToggle.value:
             self._add_figure_labels(w_crop, h_crop)
+        self._apply_figure_title()
+        self._export_dirty = True
+        self.canvas.draw_idle()
+
+    def _set_axis_visibility(self) -> None:
+        """Hide axes (ticks, labels, spines) when corner labels are shown."""
+        if self.labelToggle.value:
+            self.ax.set_axis_off()
         else:
-            with self.figure.batch_update():
-                self.figure.layout.annotations = []
-                self.figure.layout.shapes      = []
+            self.ax.set_axis_on()
+
+    def _update_colorbar(self, vmin: float, vmax: float) -> None:
+        """Refresh colorbar label + two-tick annotation for current clim."""
+        if self._cbar is None:
+            return
+        channel = self.channelSelect.value
+        unit    = self.image_info['unit']
+        self._cbar.set_label(f'{channel} ({unit})',
+                             fontsize=self.figAxesLabelSize.value,labelpad=0,rotation=270)#labelpad=-15)
+        self._cbar.set_ticks([vmin, vmax])
+        self._cbar.ax.set_yticklabels([f'{vmin:.2f}', f'{vmax:.2f}'],
+                                      fontsize=self.figTickSize.value,rotation=270,verticalalignment='center')
 
     # ------------------------------------------------------------------
     # File I/O
@@ -475,17 +486,13 @@ class fileBrowser(BaseBrowser):
         self._loading = True
         self.contextSelect.value = ()      # reset selection; observer suppressed
         self._update_channel_selection()   # channel observer suppressed
-        self._populate_header_inspector()  # Concern 4: header key list
+        self._populate_header_inspector()
         self._loading = False
-        self._update_context_list()        # Concern 4: refresh time context
+        self._update_context_list()        # refresh time context
         self.update_image_data()           # runs exactly once
 
     def _cache_scan_param(self, key: str, default=('N/A', '')):
-        """Return img.get_param(key), caching the result until next file load.
-
-        Returns *default* when get_param returns None (missing header key) so
-        callers can safely index result[0]/result[1] without a TypeError.
-        """
+        """Return img.get_param(key), caching until next file load (None → default)."""
         if key not in self._scan_cache:
             val = self.img.get_param(key)
             self._scan_cache[key] = val if val is not None else default
@@ -585,10 +592,12 @@ class fileBrowser(BaseBrowser):
             self.scan_dict['date'] = (f'{self.img.header.get("rec_date", "N/A")} '
                                       f'{self.img.header.get("rec_time", "")}').strip()
 
-        self.scan_info = '<br>'.join(label) if self.titleToggle.value else ''
+        self.scan_info = '\n'.join(label) if self.titleToggle.value else ''
 
     def update_axes(self) -> None:
-        """Render image_data onto the FigureWidget via batch_update."""
+        """Rebuild the image plot from image_data on the persistent axes.
+
+        No canvas draw here — _redraw issues the single draw afterwards."""
         if self.img is None:
             return
         scan_dir = self._cache_scan_param('scan_dir')
@@ -600,103 +609,148 @@ class fileBrowser(BaseBrowser):
         y_px, x_px = data.shape
         w_crop = width  * x_px / col
         h_crop = height * y_px / row
+        self._last_crop = (h_crop, w_crop)
 
-        # Plotly Heatmap: first z-row → bottom of plot by default.
-        # scan_dir='down' matches matplotlib origin='upper' → flip z so the
-        # first data row appears at the top (y increases downward in scan coords).
-        z = data[::-1] if scan_dir == 'down' else data
-
-        vmin = self.vmin.value
-        vmax = self.vmax.value
+        vmin, vmax = self.vmin.value, self.vmax.value
         channel = self.channelSelect.value
         unit    = self.image_info['unit']
 
-        with self.figure.batch_update():
-            hm = self.figure.data[0]
-            hm.z          = z
-            hm.x          = np.linspace(0, w_crop, x_px)
-            hm.y          = np.linspace(0, h_crop, y_px)
-            hm.zmin       = vmin
-            hm.zmax       = vmax
-            hm.colorscale = self._resolve_colorscale(self.cmapSelection.value)
-            hm.reversescale = self.reverseScaleToggle.value
-            hm.colorbar = dict(
-                title=dict(text=f'{channel} ({unit})', side='right'),
-                thickness=12,
-                len=1.0, lenmode='fraction',
-                y=0.5, yanchor='middle',
-                tickvals=[vmin, vmax],
-                ticktext=[f'{vmin:.2f}', f'{vmax:.2f}'],
-            )
-            self._last_crop = (h_crop, w_crop)
-            show_axes = not self.labelToggle.value
-            self.figure.update_layout(
-                xaxis=dict(title='x (nm)', tickvals=[0, w_crop],
-                           ticktext=['0', f'{w_crop:.2f}'],
-                           visible=show_axes),
-                yaxis=dict(title='y (nm)', tickvals=[0, h_crop],
-                           ticktext=['0', f'{h_crop:.2f}'],
-                           visible=show_axes),
-                annotations=[], shapes=[],
-            )
-
+        # Resize the figure to the image aspect ratio, then rebuild artists
         self._update_fig_width(h_crop, w_crop)
+        self._remove_cbar()
+        self.ax.clear()          # also drops overlay/label/context artists
+        self._overlay_artists = []
+        self._label_artists   = []
+        self._ctx_artists     = []
+
+        # origin='upper' puts data row 0 at the top (scan_dir='down'),
+        # matching the old matplotlib behaviour the plotly code emulated.
+        self._im = self.ax.imshow(
+            data, extent=(0, w_crop, 0, h_crop),
+            origin='upper' if scan_dir == 'down' else 'lower',
+            cmap=self._resolve_cmap(self.cmapSelection.value,
+                                    self.reverseScaleToggle.value),
+            vmin=vmin, vmax=vmax, aspect='equal', interpolation='nearest')
+
+        self._style_axes(self.ax)
+        # Two-point ticks at the image extremes (style sets locators — override)
+        self.ax.set_xticks([0, w_crop], ['0', f'{w_crop:.2f}'])
+        self.ax.set_yticks([0, h_crop], ['0', f'{h_crop:.2f}'])
+        self.ax.set_xlabel('x (nm)')
+        self.ax.set_ylabel('y (nm)')
+
+        # Colorbar in its own axes inside the reserved right margin
+        self._cax  = self.figure.add_axes(self._cbar_rect())
+        self._cbar = self.figure.colorbar(self._im, cax=self._cax)
+        self._update_colorbar(vmin, vmax)
+
+        self._set_axis_visibility()
         self._apply_figure_title()
         if self.labelToggle.value:
             self._add_figure_labels(w_crop, h_crop)
+        # Re-render context markers for the current selection (survive rebuilds)
+        if self.contextToggle.value and self.contextSelect.value:
+            self._render_context_markers(self.contextSelect.value)
 
+    # ------------------------------------------------------------------
+    # Sizing (fixed pixel budget; aspect-ratio correct)
     # ------------------------------------------------------------------
 
     def _compute_fig_size(self, h_crop: float, w_crop: float) -> tuple[int, int]:
         """Return (width_px, height_px) that fits the image aspect ratio within
         the figWidth × figHeight budget.  Falls back to a square if crop is zero.
-        Minimum plot area is 200 × 200 px regardless of widget values or aspect ratio."""
-        L, R, T, B = 60, 60 + self._CTX_LEGEND_W, 80, 60
+        Minimum plot area is 200 × 200 px regardless of widget values."""
+        L, T, B = 60, 170, 60
+        R_budget = 60 + self._CTX_LEGEND_W   # plot budget: ALWAYS reserved
+        R_out    = 60 + self._ctx_w()        # canvas width: toggle-dependent
         MIN_PLOT = 200
-        max_plot_h = max(MIN_PLOT, self.figHeight.value - T - B)
-        max_plot_w = max(MIN_PLOT, self.figWidth.value  - L - R)
+        # T is generous slack for multi-line titles; the plot budget still
+        # reserves only the legacy 80 px so plot size is unchanged. The plot
+        # budget also always reserves the full ctx-legend width so toggling
+        # Context never changes the plot size or aspect — only the canvas
+        # grows/shrinks. Unused slack never reaches the export
+        # (savefig bbox_inches='tight').
+        max_plot_h = max(MIN_PLOT, self._fig_h_px() - 80 - B)
+        max_plot_w = max(MIN_PLOT, self._fig_w_px() - L - R_budget)
         if h_crop <= 0 or w_crop <= 0:
-            return L + max_plot_h + R, T + max_plot_h + B  # square fallback
+            return L + max_plot_h + R_out, T + max_plot_h + B  # square fallback
         plot_h = max_plot_h
         plot_w = max(MIN_PLOT, int(plot_h * w_crop / h_crop))
         if plot_w > max_plot_w:                 # wide image: constrain by width
             plot_w = max_plot_w
             plot_h = max(MIN_PLOT, int(plot_w * h_crop / w_crop))
-        return L + plot_w + R, T + plot_h + B
+        return L + plot_w + R_out, T + plot_h + B
+
+    def _ctx_w(self) -> int:
+        """Ctx-legend margin width: full when the Context toggle is on,
+        30 px otherwise (just enough for the colorbar's numeric labels)."""
+        on = getattr(self, 'contextToggle', None) is not None \
+            and self.contextToggle.value
+        return self._CTX_LEGEND_W if on else 30
+
+    def _margins(self) -> dict:
+        # t matches the slack T in _compute_fig_size (title headroom);
+        # r tracks the Context toggle (see _ctx_w)
+        return dict(l=60, r=60 + self._ctx_w(), t=170, b=60)
 
     def _update_fig_width(self, h_crop: float, w_crop: float) -> None:
-        """Resize the figure to match the image aspect ratio (called on each image load)."""
+        """Resize figure + axes box to match the image aspect ratio."""
         w_px, h_px = self._compute_fig_size(h_crop, w_crop)
-        self.figure.update_layout(autosize=False, width=w_px, height=h_px)
+        self._fig_px = (w_px, h_px)
+        self.figure.set_size_inches(w_px / self._DPI, h_px / self._DPI, forward=True)
+        self.ax.set_position(self._ax_rect(self._margins(), w_px, h_px))
+
+    def _cbar_rect(self) -> list:
+        """Colorbar axes rect: 14 px wide, 10 px right of the plot box."""
+        w_px, h_px = getattr(self, '_fig_px',
+                             (self._fig_w_px(), self._fig_h_px()))
+        m = self._margins()
+        return [1 - (m['r'] - 10) / w_px, m['b'] / h_px, 14 / w_px,
+                1 - (m['t'] + m['b']) / h_px]
+
+    def _remove_cbar(self) -> None:
+        if self._cbar is not None:
+            try:
+                self._cbar.remove()          # removes its cax too
+            except Exception:
+                pass
+            self._cbar = self._cax = None
 
     def _on_ctx_legend_w_change(self, change) -> None:
-        """Resize the reserved right margin and re-render any active context markers.
+        """Resize the reserved right margin and re-render context markers.
 
-        Guarded by _loading: template application sets figCtxLegendW.value while
-        suppressing observers, so skip the layout cascade during those batch
-        updates (otherwise it fires before the image/context list is ready).
-        """
+        Guarded by _loading: template application sets figCtxLegendW.value
+        while suppressing observers."""
         if self._loading:
             return
         self._CTX_LEGEND_W = change['new']
         self._apply_figure_layout()
         if self.contextToggle.value and self.contextSelect.value:
             self._render_context_markers(self.contextSelect.value)
+            self.canvas.draw_idle()
 
     def _apply_figure_layout(self, _=None) -> None:
-        """'Apply Settings' callback: compute aspect-ratio size then apply all settings."""
+        """'Apply Settings' callback: aspect-ratio size then all settings."""
         h_crop, w_crop = self._last_crop
         w_px, h_px = self._compute_fig_size(h_crop, w_crop)
-        self._figure_layout_update(
-            margin=dict(l=60, r=60 + self._CTX_LEGEND_W, t=80, b=60),
-            autosize=False, width=w_px, height=h_px,
-        )
+        self._fig_px = (w_px, h_px)
+        self._figure_layout_update(margin=self._margins(), width=w_px, height=h_px)
+        if self._cax is not None:
+            self._cax.set_position(self._cbar_rect())
+
+    def _clear_label_artists(self) -> None:
+        for art in self._label_artists:
+            try:
+                art.remove()
+            except Exception:
+                pass
+        self._label_artists = []
 
     def _add_figure_labels(self, w: float, h: float) -> None:
-        """Overlay corner text / scalebar annotations via plotly paper-coords."""
+        """Overlay corner text / scalebar via axes-fraction coordinates."""
+        from matplotlib.lines import Line2D
         color = self.labelColorSelect.value
         fs    = self.labelFontSize.value
-        # Paper-fraction corners: xf, yf ∈ [0,1] map to axes area edges
         corners = {
             'upper left':  (self.upperLeftSelect.value,  0.03, 0.97),
             'upper right': (self.upperRightSelect.value, 0.97, 0.97),
@@ -714,69 +768,53 @@ class fileBrowser(BaseBrowser):
                                                   ('M', self.medianToggle),
                                                   ('LP', self.laplacToggle)] if t.value),
         }
-        annotations, shapes = [], []
         iw = self.image_info['width']
 
         for position, (selection, xf, yf) in corners.items():
             if selection == 'none':
                 continue
             ha, va = self._ALIGN_PARAMS[position]
-            xanchor = ha           # 'left' | 'right'
-            yanchor = va           # 'top'  | 'bottom'
 
             if selection == 'scalebar':
                 standards = [.1, .2, .5, 1, 2, 5, 10, 20, 50,
                              100, 200, 500, 1000, 2000, 5000]
                 sb_len = min(standards, key=lambda x: abs(x - iw * 0.20))
                 label  = f'{sb_len * 10:.0f} Å' if sb_len < 1 else f'{sb_len:.0f} nm'
-                frac   = sb_len / iw  # bar length in paper-fraction of image width
+                frac   = sb_len / iw  # bar length as fraction of image width
 
-                # Horizontal bar position in paper coords
                 if ha == 'right':
                     bar_x1, bar_x0 = xf, xf - frac
                 else:
                     bar_x0, bar_x1 = xf, xf + frac
-                # Vertical position of bar and label (label always above bar)
-                bar_y  = 0.08 if va == 'bottom' else 0.90
-                lbl_y  = bar_y + 0.04
+                bar_y = 0.08 if va == 'bottom' else 0.90
+                lbl_y = bar_y + 0.02
 
-                shapes.append(dict(
-                    type='line', x0=bar_x0, x1=bar_x1, y0=bar_y, y1=bar_y,
-                    xref='x domain', yref='y domain',
-                    line=dict(color=color, width=3)))
-                annotations.append(dict(
-                    x=(bar_x0 + bar_x1) / 2, y=lbl_y, text=label,
-                    xref='x domain', yref='y domain',
-                    xanchor='center', yanchor='bottom', showarrow=False,
-                    font=dict(size=fs, color=color)))
+                bar = Line2D([bar_x0, bar_x1], [bar_y, bar_y],
+                             transform=self.ax.transAxes,
+                             color=color, linewidth=3)
+                self.ax.add_line(bar)
+                self._label_artists.append(bar)
+                txt = self.ax.text((bar_x0 + bar_x1) / 2, lbl_y, label,
+                                   transform=self.ax.transAxes,
+                                   ha='center', va='bottom',
+                                   fontsize=fs, color=color)
+                self._label_artists.append(txt)
                 continue
 
-            annotations.append(dict(
-                x=xf, y=yf, text=text_map.get(selection, ''),
-                xref='x domain', yref='y domain',
-                xanchor=xanchor, yanchor=yanchor,
-                showarrow=False, font=dict(size=fs, color=color)))
-
-        with self.figure.batch_update():
-            self.figure.layout.annotations = annotations
-            self.figure.layout.shapes      = shapes
+            txt = self.ax.text(xf, yf, text_map.get(selection, ''),
+                               transform=self.ax.transAxes,
+                               ha=ha, va=va, fontsize=fs, color=color)
+            self._label_artists.append(txt)
 
     # ------------------------------------------------------------------
-    # Navigation
+    # Title
     # ------------------------------------------------------------------
 
     def _apply_figure_title(self) -> None:
-        """Set figure title text and font; automargin reserves the space (I5).
-
-        Anchored top-left at y=0.925 in container coords; automargin=True lets
-        plotly size the top margin to the title so no hand-tuned pixel margin
-        is needed (mirrors DAT's approach for consistent whitespace).
-        """
-        self.figure.update_layout(title=dict(
-            text=self.scan_info, font=dict(size=self.figTitleSize.value),
-            x=0, y=0.925, yref='container', xref='paper',
-            xanchor='left', yanchor='bottom', automargin=True))
-
+        """Set the axes title (multi-line, top-left) from scan_info."""
+        self.ax.set_title(self.scan_info, loc='left',
+                          fontsize=self.figTitleSize.value,
+                          color=self.figTitleColor.value)
 
     def _update_channel_selection(self) -> None:
         current = self.channelSelect.value
@@ -784,41 +822,13 @@ class fileBrowser(BaseBrowser):
         self.channelSelect.value = (current if current in self.img.channels
                                     else self.img.channels[0])
 
-    def _update_info_text(self) -> None:
-        self.filenameText.value  = self.sxm_files[self.image_index]   # F3: sxm_files not all_files
-        self.selectionList.value = self.sxm_files[self.image_index]
-
-    def nextDisplay(self, a) -> None:
-        if self.image_index < len(self.sxm_files) - 1:  # F4: bound on sxm_files, not all_files
-            self.image_index += 1
-            self._loading = True
-            self._update_info_text()   # sync UI; handler_file_selection suppressed
-            self._loading = False
-            try:
-                self.load_new_image()
-                self._redraw()
-            except Exception as err:
-                self.updateErrorText('navigation error: ' + str(err))
-
-    def previousDisplay(self, a) -> None:
-        if self.image_index > 0:
-            self.image_index -= 1
-            self._loading = True
-            self._update_info_text()
-            self._loading = False
-            try:
-                self.load_new_image()
-                self._redraw()
-            except Exception as err:
-                self.updateErrorText('navigation error: ' + str(err))
-
     def update_scan_direction(self, a) -> None:
         self.directionBtn.icon = ('caret-square-o-left' if self.directionBtn.value
                                   else 'caret-square-o-right')
         self.redraw_image(a)
 
     # ------------------------------------------------------------------
-    # Handlers
+    # Public accessors
     # ------------------------------------------------------------------
 
     def get_plot_data(self):
@@ -858,16 +868,13 @@ class fileBrowser(BaseBrowser):
         unit = lbl.get('unit', 'nm')
         width  = lbl.get('width', 1)
         height = lbl.get('height', 1)
-        cmap   = self._resolve_colorscale(self.cmapSelection.value)
-        if isinstance(cmap, list):
-            cmap_repr = repr(cmap)
-        else:
-            cmap_repr = repr(str(cmap))
+        cmap_name = self.cmapSelection.value
+        if self.reverseScaleToggle.value:
+            cmap_name += '_r'
         vmin_val = self.vmin.value
         vmax_val = self.vmax.value
         lines = [
             "import numpy as np",
-            "import plotly.graph_objects as go",
             "from spmpy import Spm",
             "from simpleNFB.process_utils import remove_line_average",
             "",
@@ -893,7 +900,7 @@ class fileBrowser(BaseBrowser):
             f"fig, ax = plt.subplots(figsize=({self._fig_width / 100:.1f}, {self._fig_height / 100:.1f}))",
             f"extent = [0, {width}, 0, {height}]",
             f"im = ax.imshow(data, origin='upper', extent=extent,",
-            f"               cmap={cmap_repr}, vmin={vmin_val}, vmax={vmax_val})",
+            f"               cmap={cmap_name!r}, vmin={vmin_val}, vmax={vmax_val})",
             f"fig.colorbar(im, label='{channel} ({unit})')",
             f"ax.set_xlabel('x ({unit})')",
             f"ax.set_ylabel('y ({unit})')",
@@ -962,7 +969,7 @@ class fileBrowser(BaseBrowser):
             self.depthSelection.layout.visibility = 'visible'
 
     # ------------------------------------------------------------------
-    # Header inspector + session timeline context (Concern 4)
+    # Header inspector + session timeline context
     # ------------------------------------------------------------------
 
     def _populate_header_inspector(self) -> None:
@@ -982,7 +989,11 @@ class fileBrowser(BaseBrowser):
         self.headerValueText.value = str(self.img.header.get(change['new'], ''))
 
     def _on_context_toggle(self, change) -> None:
-        """Show/hide the .dat context list; clear markers when hidden."""
+        """Show/hide the .dat context list; clear markers when hidden.
+
+        Also grows/shrinks the canvas: the ctx-legend margin exists only while
+        the toggle is on (_ctx_w). The plot box itself never changes size —
+        _compute_fig_size budgets the full width regardless (no aspect reflow)."""
         self.contextSelect.layout.display = 'flex' if change['new'] else 'none'
         if change['new']:
             self._update_context_list()
@@ -991,6 +1002,9 @@ class fileBrowser(BaseBrowser):
             self._loading = True
             self.contextSelect.value = ()
             self._loading = False
+        self._apply_figure_layout()   # resize canvas for the new margin
+        self._export_dirty = True
+        self.canvas.draw_idle()
 
     def _update_context_list(self) -> None:
         """List .dat files whose mtime falls in [this image, next image).
@@ -1018,26 +1032,23 @@ class fileBrowser(BaseBrowser):
         self._loading = False
 
     def _clear_context_traces(self) -> None:
-        """Remove context-marker scatter traces (keep base Heatmap at index 0)
-        and strip the paper-coord annotation legend, preserving corner labels."""
-        if len(self.figure.data) > 1:
-            self.figure.data = self.figure.data[:1]
-        # Drop only our legend annotations (tagged name='ctx_legend'); keep others.
-        kept = tuple(
-            a for a in (self.figure.layout.annotations or ())
-            if getattr(a, 'name', None) != 'ctx_legend'
-        )
-        self.figure.update_layout(annotations=kept)
+        """Remove context marker artists and their figure-level legend texts."""
+        for art in self._ctx_artists + self._ctx_texts:
+            try:
+                art.remove()
+            except Exception:
+                pass
+        self._ctx_artists = []
+        self._ctx_texts   = []
 
     def _render_context_markers(self, selected_dats) -> None:
-        """Plot one Scatter marker per selected .dat with a paper-coord annotation
-        legend mapping filename → colour.
+        """Plot one marker per selected .dat with a figure-coordinate legend
+        column (filename → colour) inside the reserved right margin.
 
-        A trace legend (showlegend=True) is intentionally NOT used: plotly docs
-        confirm it grows the plot margins to fit the legend box, which shrinks the
-        plot area and breaks the heatmap aspect ratio.  Paper-anchored annotations
-        draw on top of the fixed plot area without any margin reflow.
-        Positions are cached in _context_spm_cache to avoid re-reading from disk.
+        Figure-anchored texts draw outside the fixed plot box, so the heatmap
+        aspect ratio never reflows when the legend appears (same rationale as
+        the plotly annotation approach). Positions are cached in
+        _context_spm_cache to avoid re-reading from disk.
         """
         self._clear_context_traces()
         if not selected_dats or self.img is None:
@@ -1045,8 +1056,6 @@ class fileBrowser(BaseBrowser):
         directory = self.directories[self.directorySelection.index]
         if directory != self.active_dir:
             directory = self.active_dir / directory
-        colors = px.colors.qualitative.Plotly
-        traces = []
         legend_entries = []   # (color, filename) in draw order
         for i, dat in enumerate(selected_dats):
             if dat not in self._context_spm_cache:
@@ -1061,49 +1070,44 @@ class fileBrowser(BaseBrowser):
             except Exception as err:
                 self.updateErrorText(f'context position error ({dat}): {err}')
                 continue
-            color = colors[i % len(colors)]
-            traces.append(go.Scatter(
-                x=[rx], y=[ry], mode='markers',
-                name=dat, showlegend=False,
-                marker=dict(symbol='x', size=12, color=color, line_width=2)))
+            color = _CTX_COLORS[i % len(_CTX_COLORS)]
+            marker, = self.ax.plot([rx], [ry], linestyle='none',
+                                   marker='x', markersize=12,
+                                   markeredgewidth=2, color=color)
+            self._ctx_artists.append(marker)
             legend_entries.append((color, dat))
-        if not traces:
+        if not legend_entries:
             return
-        self.figure.add_traces(traces)
-        # Compute annotation x past the colorbar right edge + 20 px clearance.
-        # Colorbar defaults: x=1.02 paper (left-anchored), thickness=12 px set
-        # explicitly, xpad=10 px each side (Plotly default).
-        # Right edge of colorbar in paper = 1.02 + (thickness + 2*xpad) / plot_w.
-        w_px, _ = self._compute_fig_size(*self._last_crop)
-        plot_w = max(1, w_px - 60 - (60 + self._CTX_LEGEND_W))
-        x_ann = 1.02 + (12 + 2 * 10 + 20) / plot_w   # +52 px: cb width + gap
-        row_dy = 0.045   # vertical spacing between entries (paper fraction)
-        y0     = 0.985   # top entry y (just inside upper edge)
-        new_anns = tuple(
-            dict(name='ctx_legend', xref='paper', yref='paper',
-                 x=x_ann, y=y0 - idx * row_dy,
-                 xanchor='left', yanchor='top', showarrow=False,
-                 align='left',
-                 text=f'<span style="color:{color}">✕</span> {name}',
-                 font=dict(size=self.fontsize, color='black'),
-                 bgcolor='rgba(255,255,255,0.6)', borderpad=1)
-            for idx, (color, name) in enumerate(legend_entries)
-        )
-        existing = tuple(self.figure.layout.annotations or ())
-        self.figure.update_layout(annotations=existing + new_anns)
+        # Legend column: figure coords, just right of the colorbar.
+        w_px, h_px = getattr(self, '_fig_px',
+                             (self._fig_w_px(), self._fig_h_px()))
+        m = self._margins()
+        x_txt  = 1.05 - (m['r'] - 36) / w_px      # past plot box + colorbar
+        row_dy = 0.045
+        y0     = 0.98 - m['t'] / h_px             # just below top of plot box
+        for idx, (color, name) in enumerate(legend_entries):
+            txt = self.figure.text(
+                x_txt, y0 - idx * row_dy, f'✕ {name}',
+                ha='left', va='top', fontsize=self.fontsize, color=color,
+                bbox=dict(facecolor='white', alpha=0.6, edgecolor='none', pad=1))
+            self._ctx_texts.append(txt)
 
     def _on_context_select(self, change) -> None:
         """Render markers for the selected .dat file(s) on this SXM image."""
         if self._loading:
             return
         self._render_context_markers(change['new'])
+        self._export_dirty = True
+        self.canvas.draw_idle()
+
+    # ------------------------------------------------------------------
+    # Handlers
+    # ------------------------------------------------------------------
 
     def handler_folder_selection(self, a) -> None:
         self._set_busy(True, 'Scanning folder...')
         try:
             index = 0
-            # I4: no refreshBtn branch — refreshBtn is wired to
-            # handler_root_folder_update, never to this handler.
             directory = self.directories[self.directorySelection.index]
             # I3: scandir + endswith (no false matches like .sxm.bak); mtime sort
             self.sxm_files, self.dat_files = [], []
@@ -1119,7 +1123,7 @@ class fileBrowser(BaseBrowser):
             self.sxm_files = [n for _, n in reversed(sxm_mt)]
             self.dat_files = [n for _, n in dat_mt]
             self.all_files = self.sxm_files + self.dat_files
-            # Concern 4: session timeline index (free — mtimes already collected)
+            # Session timeline index (free — mtimes already collected)
             self.session_index = ([(n, 'sxm', m) for m, n in sxm_mt]
                                   + [(n, 'dat', m) for m, n in dat_mt])
             # suppress handler_file_selection while syncing list widget state
@@ -1144,6 +1148,7 @@ class fileBrowser(BaseBrowser):
             return
         self._set_busy(True, 'Loading image...')
         try:
+            # §7 single render: load + process fully, then one _redraw
             self.image_index = self.sxm_files.index(self.selectionList.value)
             self.load_new_image()
             self._redraw()
@@ -1153,9 +1158,12 @@ class fileBrowser(BaseBrowser):
         finally:
             self._set_busy(False)
 
+    def _figure_settings_extras(self) -> list:
+        """SXM contribution to the Figure Settings tab (see BaseBrowser)."""
+        return [self.figCtxLegendW]
 
     def _template_extra_save(self) -> dict:
-        """Capture SXM label settings and context legend width alongside the plotly template."""
+        """Capture SXM label settings and context legend width with the template."""
         return {
             'labels': {
                 'show':        self.labelToggle.value,
@@ -1170,7 +1178,7 @@ class fileBrowser(BaseBrowser):
         }
 
     def _template_extra_apply(self, entry: dict) -> None:
-        """Restore SXM label settings and context legend width from a saved template entry."""
+        """Restore SXM label settings and context legend width from a template."""
         labels = entry.get('labels')
         if labels:
             self._loading = True
@@ -1188,9 +1196,8 @@ class fileBrowser(BaseBrowser):
                 self._loading = False
         if 'ctx_legend_w' in entry:
             # Set the widget under _loading suppression so _on_ctx_legend_w_change
-            # does NOT run its layout cascade mid-template-apply (that ran before
-            # the image/context list was ready and left the context list empty).
-            # Sync the reserved margin and apply the layout once, explicitly.
+            # does not run its layout cascade mid-template-apply; sync the margin
+            # and apply the layout once, explicitly.
             self._loading = True
             try:
                 self.figCtxLegendW.value = entry['ctx_legend_w']

@@ -6,7 +6,8 @@ SXM scan images and DAT spectroscopy files — without leaving the notebook.
 
 It is built for scientists and researchers already familiar with SPM data. Point
 a browser at a measurement session's root folder and it recursively discovers
-every SXM and DAT file, renders it with an interactive plotly figure, and gives
+every SXM and DAT file, renders it with an interactive matplotlib figure
+(via the [ipympl](https://matplotlib.org/ipympl/) widget backend), and gives
 you publication-oriented export tools. File reading and channel/parameter access
 are handled by [spmpy](https://github.com/nanotech-empa/spmpy), so the data you
 see in the browser is exactly what spmpy exposes.
@@ -73,6 +74,10 @@ pip install -e .
 widgets cleanly and the code-export tools inject cells reliably. Launching the
 notebook in a standard **web browser** (JupyterLab / Notebook 7) also works and
 should be fully supported.
+
+The browsers build their matplotlib canvases directly on the ipympl backend —
+no `%matplotlib widget` magic is required (or recommended) in either
+environment. `ipympl` and `ipywidgets` are installed automatically.
 
 Minimal usage:
 

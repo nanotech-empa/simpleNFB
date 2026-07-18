@@ -1,64 +1,22 @@
 {
   "name": "default",
-  "template": {
-    "layout": {
-      "font": {
-        "family": "Arial"
-      },
-      "height": 550,
-      "legend": {
-        "font": {
-          "color": "black",
-          "size": 11
-        }
-      },
-      "paper_bgcolor": "#ffffff",
-      "plot_bgcolor": "#ffffff",
-      "title": {
-        "font": {
-          "color": "black",
-          "size": 12
-        }
-      },
-      "width": 700,
-      "xaxis": {
-        "linecolor": "black",
-        "linewidth": 1,
-        "mirror": true,
-        "nticks": 0,
-        "showgrid": false,
-        "showline": true,
-        "tickfont": {
-          "color": "black",
-          "size": 10
-        },
-        "ticks": "outside",
-        "title": {
-          "font": {
-            "color": "black",
-            "size": 12
-          }
-        }
-      },
-      "yaxis": {
-        "linecolor": "black",
-        "linewidth": 1,
-        "mirror": true,
-        "nticks": 0,
-        "showgrid": false,
-        "showline": true,
-        "tickfont": {
-          "color": "black",
-          "size": 10
-        },
-        "ticks": "outside",
-        "title": {
-          "font": {
-            "color": "black",
-            "size": 12
-          }
-        }
-      }
-    }
+  "settings": {
+    "font_family": "Arial",
+    "title_size": 12,
+    "title_color": "black",
+    "axes_label_size": 16,
+    "axes_label_color": "black",
+    "tick_size": 16,
+    "tick_color": "black",
+    "legend_size": 14,
+    "legend_color": "black",
+    "bg_color": "white",
+    "axes_border": true,
+    "grid": false,
+    "ticks_mode": "outside",
+    "x_ticks": "auto",
+    "y_ticks": "auto",
+    "width": 9.0,
+    "height": 6.0
   }
 }
