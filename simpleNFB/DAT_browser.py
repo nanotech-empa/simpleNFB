@@ -800,7 +800,7 @@ class fileBrowser(BaseBrowser):
         try:
             out_dir = self.active_dir / 'browser_outputs'
             out_dir.mkdir(exist_ok=True)
-            stem = (f'{str(self.directorySelection.value).split(chr(92))[-1]}'
+            stem = (f'{self._current_dir_name()}'
                     f'_{self.spec[0].name.split(".")[0]}_{self.channelYSelect.value[0]}')
             if self.saveNote.value:
                 stem += f'_{self.saveNote.value}'

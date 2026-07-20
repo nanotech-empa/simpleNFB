@@ -557,6 +557,17 @@ class BaseBrowser:
         """Return the filename stem (without note or extension) for save_figure."""
         raise NotImplementedError
 
+    def _current_dir_name(self) -> str:
+        """Name of the currently selected directory for use in filenames.
+
+        Taken from the internal Path list (self.directories), NOT from
+        directorySelection.value — the widget shows decorated display strings
+        (tree glyphs ├─ │ 📁) that must never reach the filesystem."""
+        try:
+            return Path(self.directories[self.directorySelection.index]).resolve().name
+        except Exception:
+            return Path(self.active_dir).resolve().name
+
     # ------------------------------------------------------------------
     # Export / copy — Agg savefig, no external renderer
     # ------------------------------------------------------------------
@@ -593,7 +604,7 @@ class BaseBrowser:
         try:
             out_dir = self.active_dir / 'browser_outputs'
             out_dir.mkdir(exist_ok=True)
-            dir_name = str(self.directorySelection.value).split(chr(92))[-1]
+            dir_name = self._current_dir_name()
             stem = self._figure_stem(dir_name)
             if self.saveNote.value:
                 stem += f'_{self.saveNote.value}'
@@ -714,7 +725,7 @@ class BaseBrowser:
             if getattr(getattr(self, 'saveBtn', None), 'value', True):
                 out_dir = self.active_dir / 'browser_outputs'
                 out_dir.mkdir(exist_ok=True)
-                dir_name = str(self.directorySelection.value).split(chr(92))[-1]
+                dir_name = self._current_dir_name()
                 stem = self._figure_stem(dir_name)
                 if self.saveNote.value:
                     stem += f'_{self.saveNote.value}'

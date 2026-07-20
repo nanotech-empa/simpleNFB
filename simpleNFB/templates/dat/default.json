@@ -17,6 +17,8 @@
     "x_ticks": "auto",
     "y_ticks": "auto",
     "width": 9.0,
-    "height": 6.0
-  }
+    "height": 4.5
+  },
+  "cdn_legend_w": 0.15,
+  "cdn_legend_loc": "Right"
 }
