@@ -16,8 +16,9 @@
     "ticks_mode": "outside",
     "x_ticks": "auto",
     "y_ticks": "auto",
-    "width": 850,
-    "height": 850
+    "width": 8.5,
+    "height": 8.5,
+    "save_format": "svg"
   },
   "labels": {
     "show": true,

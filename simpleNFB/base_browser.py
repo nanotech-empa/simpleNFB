@@ -51,7 +51,7 @@ class BaseBrowser:
     #: One place to change raster resolution. figWidth/figHeight widgets are in
     #: pixels; matplotlib thinks in inches, so px / _DPI = inches everywhere.
     _DPI: int = 100
-
+    _figure_format: str | None = None  # 'png' or 'svg' (None = default == png)
     # Directories containing these strings are never recursed into.
     _SKIP_DIRS: frozenset = frozenset({
         'browser_outputs',
@@ -88,6 +88,11 @@ class BaseBrowser:
         Direct Canvas construction avoids pyplot's global figure registry and
         backend magics — the failure modes seen in VS Code notebooks.
         """
+        # _DPI is unconditionally 100. It is NOT an export knob — it is the
+        # single inch↔pixel conversion the whole GUI is built on (SXM pixel
+        # budgets, the _fig_*_px helpers, figsize math). Vector export ignores
+        # savefig dpi entirely (verified: PDF at dpi=72 vs 300 is byte-
+        # identical), so switching it for SVG/PDF changed layout for nothing.
         from ipympl.backend_nbagg import Canvas, FigureManager
         self.figure = Figure(figsize=(width_px / self._DPI, height_px / self._DPI),
                              dpi=self._DPI)
@@ -322,6 +327,16 @@ class BaseBrowser:
             value='black', description='', concise=True, layout=fWidth(34))
         self.figFontApplyBtn = widgets.Button(description='Apply Settings', layout=W98)
 
+        # Export format. Copy always puts a PNG on the clipboard (the OS
+        # clipboard can't hold SVG/PDF as an image); the saved file uses this.
+        # Seed from any constructor-supplied _figure_format so both paths agree.
+        _fmt = (self._figure_format or 'png').lower()
+        self.figFormat = widgets.Dropdown(
+            options=['png', 'svg', 'pdf', 'eps'],
+            value=_fmt if _fmt in ('png', 'svg', 'pdf', 'eps') else 'png',
+            description='Save as:', layout=W98, style=ds(60))
+        self._figure_format = self.figFormat.value
+
         # Templates
         self._templates: dict = {}
         self._templates_dir = (
@@ -366,6 +381,7 @@ class BaseBrowser:
             HB(self.figAxesLabelSize, self.figAxesLabelColor),
             HB(self.figTickSize, self.figTickColor),
             HB(self.figLegendSize, self.figLegendColor),
+            self.figFormat,
             *self._figure_settings_extras(),
             self.figFontApplyBtn,
             HB(self.figTemplateName, self.figSaveTemplateBtn),
@@ -412,6 +428,7 @@ class BaseBrowser:
         ('y_ticks',          'figYTickCount'),
         ('width',            'figWidth'),
         ('height',           'figHeight'),
+        ('save_format',      'figFormat'),
     )
 
     def _collect_settings(self) -> dict:
@@ -504,9 +521,34 @@ class BaseBrowser:
         self.figFontApplyBtn.on_click(self._apply_figure_layout)
         self.figSaveTemplateBtn.on_click(self._save_as_template)
         self.figApplyTemplateBtn.on_click(self._apply_selected_template)
+        self.figFormat.observe(self._on_format_change, names='value')
         if 'default' in self._templates:
             self.figTemplateList.value = 'default'
             self._apply_selected_template()
+
+    def _on_format_change(self, change) -> None:
+        """Sync _figure_format and invalidate the byte cache.
+
+        The cache is format-agnostic, so a stale PNG must not be written into
+        an .svg/.pdf file — force a re-render on the next export."""
+        self._figure_format = change['new']
+        self._export_dirty = True
+
+    def _export_format(self) -> str:
+        """Current export format ('png' when unset)."""
+        return (self._figure_format or 'png').lower()
+
+    @staticmethod
+    def _editable_font_rcparams():
+        """Context manager pinning SVG/PDF text to remain editable text (not
+        outlined paths) in Illustrator/Inkscape.
+
+        svg.fonttype='none'  → real <text> elements instead of vector outlines.
+        pdf.fonttype=42      → embedded TrueType (selectable/editable) instead
+                               of the default Type-3 outlines.
+        """
+        import matplotlib as mpl
+        return mpl.rc_context({'svg.fonttype': 'none', 'pdf.fonttype': 42})
 
     # ------------------------------------------------------------------
     # Redraw debounce (I1) — shared by both browsers
@@ -572,45 +614,58 @@ class BaseBrowser:
     # Export / copy — Agg savefig, no external renderer
     # ------------------------------------------------------------------
 
-    def _render_export_bytes(self) -> bytes:
-        """Render the live figure to PNG bytes, trimmed to content.
+    def _render_export_bytes(self, fmt: str | None = None) -> bytes:
+        """Render the live figure to *fmt* bytes (default: the chosen format),
+        trimmed to content.
 
-        Figure.savefig always rasterises through Agg regardless of the
+        Figure.savefig always rasterises through Agg for PNG regardless of the
         interactive canvas. bbox_inches='tight' makes the renderer compute the
         union bounding box of every artist (title, colorbar labels, figure
         texts included) and crop to it — the on-screen slack margins never
-        reach the export, and no manual margin arithmetic is needed.
-        The plot area itself stays exactly figWidth×figHeight px."""
+        reach the export. The plot area itself stays figWidth×figHeight.
+
+        Vector formats (svg/pdf/eps) ignore dpi entirely and are written at the
+        figsize physical size; dpi still governs any embedded raster (e.g. the
+        SXM heatmap). SVG/PDF text is kept editable (see _editable_font_rcparams)."""
+        fmt = (fmt or self._export_format()).lower()
         buf = io.BytesIO()
-        self.figure.savefig(buf, format='png', dpi=self.figure.dpi,
-                            transparent=True,
-                            bbox_inches='tight', pad_inches=0.03)
+        with self._editable_font_rcparams():
+            self.figure.savefig(buf, format=fmt, dpi=self.figure.dpi,
+                                transparent=True,
+                                bbox_inches='tight', pad_inches=0.03)
         return buf.getvalue()
 
     def _export_bytes_cached(self) -> bytes:
-        """Reuse the last export when nothing changed; render otherwise.
+        """Bytes for the currently selected format, reusing the last render
+        when nothing changed AND the format matches.
 
-        _export_dirty is set by every render/style path, so consecutive copies
-        of an unchanged figure skip the Agg render entirely."""
-        if not self._export_dirty and self._last_img_bytes is not None:
+        _export_dirty is set by every render/style path and by a format change,
+        so a cached PNG can never be written into an .svg/.pdf file."""
+        fmt = self._export_format()
+        if (not self._export_dirty and self._last_img_bytes is not None
+                and getattr(self, '_last_img_fmt', None) == fmt):
             return self._last_img_bytes
-        self._last_img_bytes = self._render_export_bytes()
-        self._export_dirty = False
+        self._last_img_bytes = self._render_export_bytes(fmt)
+        self._last_img_fmt   = fmt
+        self._export_dirty   = False
         return self._last_img_bytes
 
+    def _save_path(self) -> str:
+        """browser_outputs/<stem>[_note].<format> for the current selection."""
+        out_dir = self.active_dir / 'browser_outputs'
+        out_dir.mkdir(exist_ok=True)
+        stem = self._figure_stem(self._current_dir_name())
+        if self.saveNote.value:
+            stem += f'_{self.saveNote.value}'
+        return str(out_dir / f'{stem}.{self._export_format()}')
+
     def save_figure(self, a=None) -> None:
-        """Save the current figure to browser_outputs/ as a PNG."""
+        """Save the current figure to browser_outputs/ in the chosen format."""
         self.saveBtn.icon = 'hourglass-start'
         try:
-            out_dir = self.active_dir / 'browser_outputs'
-            out_dir.mkdir(exist_ok=True)
-            dir_name = self._current_dir_name()
-            stem = self._figure_stem(dir_name)
-            if self.saveNote.value:
-                stem += f'_{self.saveNote.value}'
-            self.last_save_fname = str(out_dir / f'{stem}.png')
+            self.last_save_fname = self._save_path()
             Path(self.last_save_fname).write_bytes(self._export_bytes_cached())
-            self.updateErrorText('Figure Saved')
+            self.updateErrorText(f'Figure Saved ({self._export_format()})')
         except Exception as err:
             self.updateErrorText(f'Save error: {err}')
         finally:
@@ -716,23 +771,25 @@ class BaseBrowser:
     # ------------------------------------------------------------------
 
     def copy_figure(self, _event=None) -> None:
-        """Copy the current figure to clipboard.  If saveBtn.value is True
-        (default), also saves to browser_outputs/ as a PNG."""
+        """Copy the current figure to the clipboard, and — when saveBtn is on
+        (default) — also save it to browser_outputs/ in the chosen format.
+
+        The OS clipboard cannot hold SVG/PDF as an image, so the clipboard
+        always receives a PNG: when the export format IS png the saved bytes
+        are reused; for a vector format a separate PNG is rendered just for the
+        clipboard while the file on disk stays vector."""
         self.copyBtn.icon = 'hourglass-half'
         try:
-            img_bytes = self._export_bytes_cached()
+            fmt = self._export_format()
+            save_bytes = self._export_bytes_cached()           # chosen format
+            png_bytes  = save_bytes if fmt == 'png' else self._render_export_bytes('png')
             fname_for_ps = None
             if getattr(getattr(self, 'saveBtn', None), 'value', True):
-                out_dir = self.active_dir / 'browser_outputs'
-                out_dir.mkdir(exist_ok=True)
-                dir_name = self._current_dir_name()
-                stem = self._figure_stem(dir_name)
-                if self.saveNote.value:
-                    stem += f'_{self.saveNote.value}'
-                self.last_save_fname = str(out_dir / f'{stem}.png')
-                Path(self.last_save_fname).write_bytes(img_bytes)
-                fname_for_ps = self.last_save_fname
-                self.updateErrorText('Figure copied and saved')
+                self.last_save_fname = self._save_path()
+                Path(self.last_save_fname).write_bytes(save_bytes)
+                # PowerShell fallback needs a PNG path; a vector file won't do.
+                fname_for_ps = self.last_save_fname if fmt == 'png' else None
+                self.updateErrorText(f'Figure copied and saved ({fmt})')
             else:
                 self.updateErrorText('Figure copied')
             # --- clipboard: in-process win32 first, PowerShell fallback ---
@@ -742,14 +799,14 @@ class BaseBrowser:
                 win32clipboard.OpenClipboard()
                 try:
                     win32clipboard.EmptyClipboard()
-                    win32clipboard.SetClipboardData(fmt_png, img_bytes)
+                    win32clipboard.SetClipboardData(fmt_png, png_bytes)
                 finally:
                     win32clipboard.CloseClipboard()
             except ImportError:
                 if fname_for_ps is None:
                     import tempfile
                     tmp = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
-                    tmp.write(img_bytes); tmp.close()
+                    tmp.write(png_bytes); tmp.close()
                     fname_for_ps = tmp.name
                 ps_cmd = f'Set-Clipboard -Path "{fname_for_ps}"'
                 result = subprocess.run(['powershell', '-Command', ps_cmd],

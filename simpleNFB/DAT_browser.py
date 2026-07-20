@@ -87,9 +87,10 @@ class fileBrowser(BaseBrowser):
 
     def __init__(self, width: int = 700, height: int = 550, fontsize: int = 8,
                  titlesize: int = 5, cmap: str = 'greys', home_directory: str = './',
-                 sxmBrowser=None) -> None:
+                 sxmBrowser=None, figure_file_format: str | None = None) -> None:
         # --- state ---
         self.img           = None
+        self._figure_format = figure_file_format
         self._make_figure(width, height)             # figure / canvas / ax
         # Constrained layout = matplotlib's equivalent of plotly automargin:
         # margins are recomputed from rendered decoration extents (multi-line

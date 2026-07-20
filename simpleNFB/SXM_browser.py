@@ -60,7 +60,7 @@ class fileBrowser(BaseBrowser):
 
     def __init__(self, width: int = 1200, height: int = 1000, fontsize: int = 12,
                  titlesize: int = 12, cmap: str = 'greys',
-                 home_directory: str = './') -> None:
+                 home_directory: str = './', figure_file_format: str | None = None) -> None:
         # Normalise cmap: strip matplotlib _r suffix → reversescale toggle
         _cmap_lower = cmap.lower()
         _reversed   = _cmap_lower.endswith('_r')
@@ -70,6 +70,7 @@ class fileBrowser(BaseBrowser):
 
         # --- state ---
         self.img = None
+        self._figure_format = figure_file_format     # seeds the Save-as widget
         self._make_figure(width, height)             # figure / canvas / ax
         self._im   = self.ax.imshow(np.zeros((64, 64)),
                                     cmap=self._resolve_cmap(self._cmap, _reversed),
