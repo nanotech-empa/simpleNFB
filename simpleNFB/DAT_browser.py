@@ -21,12 +21,13 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import ListedColormap, Normalize
 from scipy.interpolate import interp1d
-from scipy.signal import medfilt, savgol_filter
+from scipy.signal import savgol_filter
 
 from spmpy import Spm
 from .base_browser import BaseBrowser
-from .process_utils import (rebin_intensity_nm_to_ev, smooth_data, group_average,
-                             relative_position, despike_z_score, moving_average)
+from .pipeline_panel import PipelinePanel
+from .process_utils import rebin_intensity_nm_to_ev, relative_position
+from .processes import discover
 from .widget_helpers import HBox, VBox, Btn_Widget, Text_Widget
 
 # Colormap catalogue from the matplotlib registry ('_r' variants omitted —
@@ -147,7 +148,14 @@ class fileBrowser(BaseBrowser):
         line, = self.ax.plot(self.spec_x[0], self.spec_data[0])
         self._lines = [line]
 
+        # Dynamic process pipeline (DYNAMIC_PIPELINE_PLAN.md §2.3-2.4): one
+        # ProcessSpec per file in processes/, discovered fresh at construction
+        # so a dropped-in process shows up with zero other code changes.
+        self._specs, _pipeline_warnings = discover()
+
         self._build_widgets()
+        for w in _pipeline_warnings:
+            self.updateErrorText(w)
         self._build_layout()
         self._connect_observers()
         self._apply_figure_layout()   # apply default Figure Settings
@@ -193,11 +201,6 @@ class fileBrowser(BaseBrowser):
                                         layout=FL(98), style={'description_width': '30px'})
 
         # image-control buttons
-        self.flattenBtn      = widgets.ToggleButton(description='', value=False, layout=L(30),
-                                                    icon='barcode',
-                                                    tooltip='Normalize each curve to max=1')
-        self.fixZeroBtn      = widgets.ToggleButton(description='', value=False, layout=L(30),
-                                                    icon='neuter', tooltip='Subtract local baseline')
         self.referenceLocBtn = Btn_Widget('', layout=L(30), icon='map-marker',
                                           tooltip='Plot tip location on image browser')
         self.saveBtn         = widgets.ToggleButton(
@@ -263,38 +266,11 @@ class fileBrowser(BaseBrowser):
         self.legendUpdate = widgets.Button(description='Update',
                                             layout=widgets.Layout(display='none', width='98%'))
 
-        # filter settings
-        self.offsetToggle    = widgets.ToggleButton(value=False, description='Offset', layout=FLB(50))
-        self.offsetSize      = widgets.FloatText(value=0.1e-12, description='amt:',
-                                                  step=.1e-12, readout_format='.1e',
-                                                  layout=FL(48), style={'description_width': '28px'})
-        self.svgToggle  = widgets.ToggleButton(value=False, description='Savitsky-Golay', layout=FLB(44))
-        self.svgSize    = widgets.BoundedIntText(description='w:', value=3, min=3, max=101, step=2,
-                                                  layout=FL(28), style={'description_width': '18px'})
-        self.svgOrder   = widgets.BoundedIntText(description='o:', value=1, min=1, max=5, step=1,
-                                                  layout=FL(26), style={'description_width': '18px'})
-        self.medFiltBtn  = widgets.ToggleButton(description='Median', value=False, layout=FLB(74))
-        self.medFiltSize = widgets.BoundedIntText(description='', value=3, min=3, max=21, step=2,
-                                                   layout=FLB(24))
-        self.despikeBtn       = widgets.ToggleButton(description='Despike', value=False, layout=FLB(44),
-                                                      tooltip='Modified Z-score spike removal')
-        self.despikeWindow    = widgets.BoundedIntText(description='w:', value=10, min=2, max=100,
-                                                        step=1, layout=FL(28),
-                                                        style={'description_width': '18px'})
-        self.despikeThreshold = widgets.FloatText(description='t:', value=3.0, step=0.5,
-                                                   layout=FL(26),
-                                                   style={'description_width': '14px'})
-        self.movAvgBtn  = widgets.ToggleButton(description='Mov. Avg', value=False, layout=FLB(74),
-                                                tooltip='Boxcar moving average')
-        self.movAvgSize = widgets.BoundedIntText(description='', value=5, min=1, max=101, step=2,
-                                                  layout=FLB(24))
-        self.thresholdToggle = widgets.ToggleButton(value=False, description='Threshold', layout=FLB(50))
-        self.thresholdValue  = widgets.FloatText(value=100, description='val:',
-                                                  layout=FL(48), style={'description_width': '28px'})
-        self.averageToggle   = widgets.ToggleButton(value=False, description='Average', layout=FLB(50))
-        self.groupSize       = widgets.BoundedIntText(description='grp:', value=3, min=3, max=20,
-                                                       step=1, layout=FL(48),
-                                                       style={'description_width': '28px'})
+        # filter settings — dynamic, reorderable pipeline (replaces the fixed
+        # toggle chain; see DYNAMIC_PIPELINE_PLAN.md §2.4). DAT accepts
+        # per-trace ('1d','xy') and whole-selection ('batch') processes.
+        self.pipelinePanel = PipelinePanel(self._specs, kinds={'1d', 'xy', 'batch'},
+                                           on_change=self._on_pipeline_change)
 
         # STML mode settings
         self.stmlToggle           = widgets.ToggleButton(value=False, description='STML Mode', layout=FLB(98))
@@ -407,9 +383,7 @@ class fileBrowser(BaseBrowser):
         self.v_filter_layout = VBox(children=[
             widgets.Label('Filter', layout=FL(50)),
             self.filterSelection, self.h_new_filter_layout])
-        self.h_process_layout = HBox(children=[
-            self.flattenBtn, self.fixZeroBtn, self.referenceLocBtn],
-            layout=FL(98))
+        self.h_process_layout = HBox(children=[self.referenceLocBtn], layout=FL(98))
         self.h_selection_btn_layout = HBox(children=[
             self.refreshBtn, self.csvBtn, self.saveBtn, self.copyBtn,
             self.codeBtn, self.settingsBtn],
@@ -441,16 +415,7 @@ class fileBrowser(BaseBrowser):
                 self.titleToggle, self.nameToggle, self.setpointToggle,
                 self.feedbackToggle, self.locationToggle, self.depthSelection,
                 self.dateToggle], layout=FLH(98)),
-            VBox(children=[
-                HBox(children=[self.offsetToggle,    self.offsetSize],                     layout=FL(98)),
-                HBox(children=[self.svgToggle,       self.svgSize,    self.svgOrder],      layout=FL(98)),
-                HBox(children=[self.medFiltBtn,      self.medFiltSize],                    layout=FL(98)),
-                HBox(children=[self.despikeBtn,      self.despikeWindow,
-                               self.despikeThreshold],                                     layout=FL(98)),
-                HBox(children=[self.movAvgBtn,       self.movAvgSize],                     layout=FL(98)),
-                HBox(children=[self.thresholdToggle, self.thresholdValue],                 layout=FL(98)),
-                HBox(children=[self.averageToggle,   self.groupSize],                      layout=FL(98)),
-            ], layout=FLH(98)),
+            VBox(children=[self.pipelinePanel.container], layout=FLH(98)),
             VBox(children=[
                 self.stmlToggle, self.normalizeTimeBtn, self.normalizeCurrentBtn,
                 self.normalizeEnergyBtn, self.normalizePlasmonBtn,
@@ -491,8 +456,8 @@ class fileBrowser(BaseBrowser):
             ], layout=FLH(98)),
             self._figure_settings_tab(),
         ], layout=FLH(98),
-        titles=['Legend Settings', 'Title Settings', 'Filter Settings',
-                'STML Mode', '2D Plot', '1D Plot', 'Header', 'Figure Settings'])
+        titles=['Legend Settings', 'Title Settings', 'Data Processing',
+                'STML Mode', '2D Plot', '1D Plot', 'File Header', 'Figure Settings'])
 
         # The ipympl Canvas is itself a widget — embed it directly.
         self.v_image_layout = VBox(children=[
@@ -513,15 +478,9 @@ class fileBrowser(BaseBrowser):
         # parameterLegendList change may affect condensed colorbar labels → tier 1
         self.parameterLegendList.observe(self._schedule_redraw, names='value')
 
-        # Tier 1 — filter/transform pipeline; debounced full rebuild
+        # Tier 1 — 2D view controls; debounced full rebuild
         for w in (self.plot2DToggle, self.plot2DYParam,
-                  self.plot2DYLabel, self.plot2DXLabel,
-                  self.offsetToggle, self.offsetSize,
-                  self.medFiltBtn, self.medFiltSize,
-                  self.despikeBtn, self.despikeWindow, self.despikeThreshold,
-                  self.movAvgBtn, self.movAvgSize,
-                  self.thresholdToggle, self.thresholdValue,
-                  self.averageToggle, self.flattenBtn, self.fixZeroBtn):
+                  self.plot2DYLabel, self.plot2DXLabel):
             w.observe(self._schedule_redraw, names='value')
 
         # Title-only — patch axes title in-place; no rebuild
@@ -529,9 +488,6 @@ class fileBrowser(BaseBrowser):
                   self.feedbackToggle, self.locationToggle, self.depthSelection,
                   self.dateToggle):
             w.observe(self._update_title, names='value')
-        # SVG filter affects data pipeline → tier 1
-        for w in (self.svgToggle, self.svgSize, self.svgOrder):
-            w.observe(self._schedule_redraw, names='value')
 
         # Tier 3 — full pipeline (data reload + render); debounced with dirty flag
         for w in (self.stmlToggle,
@@ -540,9 +496,6 @@ class fileBrowser(BaseBrowser):
             w.observe(self._schedule_redraw_dirty, names='value')
 
         # legend group
-        self.groupSize.observe(self.update_legend_settings, names='value')
-        self.groupSize.observe(self._schedule_redraw, names='value')
-        self.averageToggle.observe(self.update_legend_settings, names='value')
         self.legendModeToggle.observe(self._on_legend_mode_change, names='value')
         self.legendUpdate.on_click(self.update_legend_entry)
 
@@ -738,13 +691,19 @@ class fileBrowser(BaseBrowser):
                                    height=int(round(h * self._DPI)))
 
     def _template_extra_save(self) -> dict:
-        """Store the Condensed-legend size and placement with the template."""
+        """Store the Condensed-legend size/placement and the pipeline with the template."""
         return {'cdn_legend_w': self.figCdnLegendW.value,
-                'cdn_legend_loc': self.figCdnLegendLoc.value}
+                'cdn_legend_loc': self.figCdnLegendLoc.value,
+                'pipeline': self.pipelinePanel.to_list()}
 
     def _template_extra_apply(self, entry: dict) -> None:
-        """Restore the Condensed-legend width from a template (observers
-        suppressed; _apply_selected_template re-applies the layout after)."""
+        """Restore the Condensed-legend width and pipeline from a template
+        (observers suppressed; _apply_selected_template re-applies the layout
+        after). A missing 'pipeline' key (pre-pipeline template) is treated
+        as an empty pipeline."""
+        self.pipelinePanel.from_list(entry.get('pipeline', []))
+        for w in self.pipelinePanel.warnings:
+            self.updateErrorText(w)
         if 'cdn_legend_w' in entry:
             val = entry['cdn_legend_w']
             # Templates saved before the inch conversion stored px (> any
@@ -870,10 +829,6 @@ class fileBrowser(BaseBrowser):
         for stale in [p for p in self._spm_cache if p not in files]:
             del self._spm_cache[stale]
         return [results[p] for p in files]
-
-    def smooth_data(self, data):
-        """Apply Savitzky-Golay filter using current widget params."""
-        return smooth_data(data, self.svgSize.value, self.svgOrder.value)
 
     def _cache_scan_param(self, spec, key: str, default=('N/A', '')):
         """Return spec.get_param(key) with per-file caching (None → default)."""
@@ -1070,9 +1025,10 @@ class fileBrowser(BaseBrowser):
             label.append(f'location: {location}')
         if self.dateToggle.value:
             label.append(date_str)
-        if self.svgToggle.value:
-            label.append(f'Savitzky-Golay Filter → Window: {self.svgSize.value}, '
-                         f'Order: {self.svgOrder.value}')
+        # NOTE (behavior change): the old title line naming the active SVG
+        # filter's window/order is gone — the pipeline can hold any process
+        # combination, not just one named filter; see the panel itself for
+        # the active steps.
 
         self.spec_label = '\n'.join(label) if self.titleToggle.value else ''
 
@@ -1080,30 +1036,50 @@ class fileBrowser(BaseBrowser):
     # Plotting
     # ------------------------------------------------------------------
 
+    def _group_size(self) -> int | None:
+        """group_size of the first enabled 'group_average' pipeline step, or None."""
+        for entry in self.pipelinePanel.to_list():
+            if entry['enabled'] and entry['process'] == 'group_average':
+                return int(entry['params'].get('group_size', 3))
+        return None
+
+    def _avg_step(self, n_items: int) -> int | None:
+        """Active group_average size if it evenly divides n_items, else None.
+
+        Replaces the old `averageToggle.value and n % groupSize.value == 0`
+        guard used throughout legend/colorbar/2D-view code."""
+        k = self._group_size()
+        return k if k and n_items % k == 0 else None
+
+    def _on_pipeline_change(self, *_) -> None:
+        """PipelinePanel on_change target: re-slice legend text (group size may
+        have changed) then run the normal debounced full pipeline redraw."""
+        self.update_legend_settings(None)
+        self._schedule_redraw_dirty()
+
     def _apply_filters(self, x_values: list, y_values: list) -> tuple:
-        """Apply all active filters to copies of y_values; return (x_out, y_out)."""
-        y_out = [y.copy() for y in y_values]
+        """Executor for the dynamic pipeline (DYNAMIC_PIPELINE_PLAN.md §2.5):
+        iterate enabled steps in panel order; 'batch' steps transform the
+        whole (x_values, y_values) lists at once, 'xy'/'1d' steps loop per
+        trace. No process gets privileged raw-data access — e.g. Fix Zero
+        (an 'xy' process) sees whatever y is at that row, i.e. the CURRENT
+        pipeline state, not the original unfiltered spec_data (locked
+        supervisor decision, DYNAMIC_PIPELINE_PLAN.md §4: put Fix Zero first
+        to reproduce the old always-unfiltered behavior)."""
         x_out = list(x_values)
-        if self.averageToggle.value and len(self.spec_data) % self.groupSize.value == 0:
-            x_out, y_out = group_average(self.spec_data, self.spec_x, self.groupSize.value)
-        for i, y in enumerate(y_out):
-            if self.fixZeroBtn.value:
-                y = y - np.mean(self.spec_data[i][np.where(abs(x_out[i]) < 0.1)[0]])
-            if self.thresholdToggle.value:
-                y = y * (y < self.thresholdValue.value)
-            if self.despikeBtn.value:
-                y = despike_z_score(y, self.despikeWindow.value, self.despikeThreshold.value)
-            if self.svgToggle.value:
-                y = self.smooth_data(y)
-            if self.movAvgBtn.value:
-                y = moving_average(y, self.movAvgSize.value)
-            if self.medFiltBtn.value:
-                y = medfilt(y, self.medFiltSize.value)
-            if self.flattenBtn.value:
-                y = y / np.max(y)
-            if self.offsetToggle.value:
-                y = y + i * self.offsetSize.value
-            y_out[i] = y
+        y_out = [np.asarray(y).copy() for y in y_values]
+        for entry in self.pipelinePanel.to_list():
+            if not entry['enabled']:
+                continue
+            spec = self._specs[entry['process']]
+            params = entry['params']
+            if spec.kind == 'batch':
+                x_out, y_out = spec.call(x_out, y_out, **params)
+            elif spec.kind == 'xy':
+                paired = [spec.call(x, y, **params) for x, y in zip(x_out, y_out)]
+                x_out, y_out = [p[0] for p in paired], [p[1] for p in paired]
+            else:  # '1d'
+                y_out = [spec.call(y, **params) for y in y_out]
         return x_out, y_out
 
     def _build_legend_labels(self, x_values: list, y_out: list) -> list:
@@ -1130,16 +1106,15 @@ class fileBrowser(BaseBrowser):
                         labels[i] = f'{v / 1000:.2f} s'
             else:
                 labels = [spec.name for spec in self.spec]
-            if self.averageToggle.value and len(self.spec_data) % self.groupSize.value == 0:
-                labels = [labels[i] for i in range(0, len(labels), self.groupSize.value)]
+            k = self._avg_step(len(self.spec_data))
+            if k:
+                labels = [labels[i] for i in range(0, len(labels), k)]
         elif mode == 'Custom':
             labels = list(self.legendText.options)
         else:
             # Condensed: representative filename per group
-            k = self.groupSize.value
-            if (self.averageToggle.value
-                    and len(self.labels) >= k
-                    and len(self.labels) % k == 0):
+            k = self._avg_step(len(self.labels))
+            if k:
                 labels = [self.labels[i] for i in range(0, len(self.labels), k)]
             else:
                 labels = self.labels
@@ -1153,10 +1128,8 @@ class fileBrowser(BaseBrowser):
         with the condensed colorbar labels at the extremes.
         """
         N = len(self.spec_data)
-        k = self.groupSize.value
-        averaged = (self.averageToggle.value
-                    and N >= k and N % k == 0
-                    and n_visible == N // k)
+        k = self._avg_step(N)
+        averaged = k is not None and n_visible == N // k
         if averaged and N > 1:
             return [((i * k + (k - 1) / 2) / (N - 1)) for i in range(n_visible)]
         return list(np.linspace(0, 1, max(n_visible, 2)))[:n_visible] \
@@ -1287,10 +1260,10 @@ class fileBrowser(BaseBrowser):
         colors = self._resolve_cmap(self.cmapSelection.value)(
             np.linspace(0, 1, n_traces))
         k = 0
+        avg_k = self._avg_step(len(self.spec_data))
         for i, spec in enumerate(self.spec):
-            if self.averageToggle.value and len(self.spec_data) % self.groupSize.value == 0:
-                if i not in range(0, len(self.spec), self.groupSize.value):
-                    continue
+            if avg_k and i not in range(0, len(self.spec), avg_k):
+                continue
             rx, ry = relative_position(sxm.img, spec)
             c   = colors[k % len(colors)]
             sym = self.markerSelection.value
@@ -1349,9 +1322,7 @@ class fileBrowser(BaseBrowser):
 
         # Y axis values from header parameter or sequential index
         y_param  = self.plot2DYParam.value
-        averaged = (self.averageToggle.value
-                    and len(self.spec_data) % self.groupSize.value == 0)
-        step = self.groupSize.value if averaged else 1
+        step = self._avg_step(len(self.spec_data)) or 1
         if y_param == 'Index':
             y_vals  = np.arange(n_spec, dtype=float)
             y_label = 'Spectrum Index'
@@ -1485,9 +1456,9 @@ class fileBrowser(BaseBrowser):
         self.parameterLegendList.options = ['Filename'] + list(self.spec[0].header.keys())
         self.parameterLegendList.value   = 'Filename'
         new_selection = list(self.selectionList.value)
-        if self.averageToggle.value and len(self.spec_data) % self.groupSize.value == 0:
-            new_selection = [new_selection[i]
-                             for i in range(0, len(new_selection), self.groupSize.value)]
+        k = self._avg_step(len(self.spec_data))
+        if k:
+            new_selection = [new_selection[i] for i in range(0, len(new_selection), k)]
         self.legendText.options = new_selection
         if new_selection:
             self.legendText.value = new_selection[0]
@@ -1523,21 +1494,23 @@ class fileBrowser(BaseBrowser):
         use_plasmon = (is_stml and self.normalizePlasmonBtn.value
                        and self.plasmonInfo['file'] is not None)
 
+        # Pipeline steps (enabled only, panel order) — imports + code lines are
+        # both generated from ProcessSpec.emit_code, never hand-written per
+        # process (DYNAMIC_PIPELINE_PLAN.md §2.5).
+        pipeline   = [e for e in self.pipelinePanel.to_list() if e['enabled']]
+        stems_used = sorted({e['process'] for e in pipeline})
+
         # ── imports ──────────────────────────────────────────────────────────
-        scipy_sig = 'medfilt, savgol_filter' if use_plasmon else 'medfilt'
-        lines = [
-            "import numpy as np",
-            "from pathlib import Path",
-            f"from scipy.signal import {scipy_sig}",
-            "import matplotlib.pyplot as plt",
-            "from spmpy import Spm",
-            "from simpleNFB.process_utils import (",
-            "    rebin_intensity_nm_to_ev, smooth_data, group_average,",
-            "    despike_z_score, moving_average,",
-            ")",
-        ]
+        lines = ["import numpy as np", "from pathlib import Path"]
         if use_plasmon:
+            lines.append("from scipy.signal import savgol_filter")
             lines.append("from scipy.interpolate import interp1d")
+        lines.append("import matplotlib.pyplot as plt")
+        lines.append("from spmpy import Spm")
+        if use_rebin:
+            lines.append("from simpleNFB.process_utils import rebin_intensity_nm_to_ev")
+        for stem in stems_used:
+            lines.append(f"from simpleNFB.processes.{stem} import process as {stem}_process")
         lines.append("")
 
         # ── file list ────────────────────────────────────────────────────────
@@ -1601,44 +1574,27 @@ class fileBrowser(BaseBrowser):
             lines += ["    xx.append(energies)",
                       "spec_x, spec_data = xx, data", ""]
 
-        # ── group average (before per-trace loop) ────────────────────────────
-        if (self.averageToggle.value
-                and len(self.spec_data) >= self.groupSize.value
-                and len(self.spec_data) % self.groupSize.value == 0):
-            k = self.groupSize.value
-            lines += [
-                f"spec_x, spec_data = group_average(spec_data, spec_x, {k})",
-                "",
-            ]
-
-        # ── per-trace filters ────────────────────────────────────────────────
-        filter_body = []
-        if self.fixZeroBtn.value:
-            filter_body += ["    y = y - np.mean(y[np.where(abs(x) < 0.1)[0]])"]
-        if self.thresholdToggle.value:
-            filter_body += [f"    y = y * (y < {self.thresholdValue.value})"]
-        if self.despikeBtn.value:
-            filter_body += [
-                f"    y = despike_z_score(y, {self.despikeWindow.value},"
-                f" {self.despikeThreshold.value})"
-            ]
-        if self.svgToggle.value:
-            filter_body += [
-                f"    y = smooth_data(y, {self.svgSize.value}, {self.svgOrder.value})"
-            ]
-        if self.movAvgBtn.value:
-            filter_body += [f"    y = moving_average(y, {self.movAvgSize.value})"]
-        if self.medFiltBtn.value:
-            filter_body += [f"    y = medfilt(y, {self.medFiltSize.value})"]
-        if self.flattenBtn.value:
-            filter_body += ["    y = y / np.max(y)"]
-        if self.offsetToggle.value:
-            filter_body += [f"    y = y + i * {self.offsetSize.value}"]
-
-        if filter_body:
-            lines += ["for i, (x, y) in enumerate(zip(spec_x, spec_data)):"]
-            lines += filter_body
-            lines += ["    spec_data[i] = y", ""]
+        # ── pipeline: batch steps run wholesale on (xs, ys), then any 1d/xy
+        # steps loop per trace — same executor logic as _apply_filters, but
+        # emitted as standalone source via ProcessSpec.emit_code. Variable
+        # names xs/ys/x/y follow the KIND_VARS convention so emit_code's
+        # lines are used verbatim, with no renaming.
+        lines += ["xs, ys = spec_x, spec_data", ""]
+        trace_body = []
+        for entry in pipeline:
+            spec = self._specs[entry['process']]
+            code_line = spec.emit_code(entry['params'])
+            if spec.kind == 'batch':
+                lines += [code_line, ""]
+            else:   # '1d' or 'xy'
+                trace_body.append('    ' + code_line)
+        if trace_body:
+            lines += ["out_x, out_y = [], []",
+                      "for x, y in zip(xs, ys):"]
+            lines += trace_body
+            lines += ["    out_x.append(x)", "    out_y.append(y)",
+                      "xs, ys = out_x, out_y", ""]
+        lines += ["spec_x, spec_data = xs, ys", ""]
 
         # ── axis scale transforms (Custom only; Log handled by ax.set_*scale) ─
         if x_mode == 'Custom' and self.xCustomFormula.value.strip():
@@ -1654,12 +1610,9 @@ class fileBrowser(BaseBrowser):
         auto_y  = f"{y_ch} ({x_info.get('y_unit', '')})"
         x_label = self.xLabel1D.value.strip() or auto_x
         y_label = self.yLabel1D.value.strip() or auto_y
-        avg_active = (self.averageToggle.value
-                      and len(self.spec_data) >= self.groupSize.value
-                      and len(self.spec_data) % self.groupSize.value == 0)
-        if avg_active:
-            k = self.groupSize.value
-            lines += [f"labels = files[::{k}]", ""]
+        avg_k = self._avg_step(len(self.spec_data))
+        if avg_k:
+            lines += [f"labels = files[::{avg_k}]", ""]
         else:
             lines += ["labels = files"]
         lines += [
@@ -1756,10 +1709,8 @@ class fileBrowser(BaseBrowser):
         names = list(self.selectionList.value)
         if not names:
             return ('', '')
-        k = self.groupSize.value
-        if (self.averageToggle.value
-                and len(names) >= k
-                and len(names) % k == 0):
+        k = self._avg_step(len(names))
+        if k:
             names = [names[i] for i in range(0, len(names), k)]
         return (names[0], names[-1]) if len(names) >= 2 else (names[0], names[0])
 
@@ -1789,11 +1740,11 @@ class fileBrowser(BaseBrowser):
         self._redraw()
 
     def update_legend_settings(self, a) -> None:
-        """Re-slice legendText entries when averaging group size changes."""
+        """Re-slice legendText entries when the active group_average size changes."""
         new_selection = list(self.selectionList.value)
-        if self.averageToggle.value and len(self.spec_data) % self.groupSize.value == 0:
-            new_selection = [new_selection[i]
-                             for i in range(0, len(new_selection), self.groupSize.value)]
+        k = self._avg_step(len(self.spec_data))
+        if k:
+            new_selection = [new_selection[i] for i in range(0, len(new_selection), k)]
         self.legendText.options = new_selection
         if new_selection:
             self.legendText.value = new_selection[0]
@@ -1934,9 +1885,9 @@ class fileBrowser(BaseBrowser):
 
     def _get_spec_selection(self, filter: bool = False) -> list:
         """Return Spm objects matching get_file_selection(filter=filter)."""
-        if filter and self.averageToggle.value:
-            k = self.groupSize.value
-            if len(self.spec) >= k and len(self.spec) % k == 0:
+        if filter:
+            k = self._avg_step(len(self.spec))
+            if k:
                 return [self.spec[i] for i in range(0, len(self.spec), k)]
         return list(self.spec)
 
@@ -1946,14 +1897,14 @@ class fileBrowser(BaseBrowser):
         Parameters
         ----------
         filter : bool
-            When True and the averaging filter is active, return one filename
-            per averaged group (the first file of each group), matching the
-            number of traces in the figure.
+            When True and a 'Group Average' pipeline step is active, return
+            one filename per averaged group (the first file of each group),
+            matching the number of traces in the figure.
         """
         files = list(self.selectionList.value)
-        if filter and self.averageToggle.value:
-            k = self.groupSize.value
-            if len(files) >= k and len(files) % k == 0:
+        if filter:
+            k = self._avg_step(len(files))
+            if k:
                 files = [files[i] for i in range(0, len(files), k)]
         return files
 

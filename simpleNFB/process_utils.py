@@ -1,103 +1,49 @@
 '''
-Created: 14.06.26
-Author: amsp
-Description: Standalone data processing functions shared by DAT_browser and SXM_browser.
-    All functions are pure (no widget or browser state) and operate on numpy arrays.
+Created: 14.06.26. Reduced to a re-export shim: 21.07.26 (DYNAMIC_PIPELINE_PLAN.md
+Phase 1). The functions below now live one-per-file under simpleNFB/processes/
+(NAME/KIND/PARAMS/process contract, used by the pipeline UI). This module keeps
+old notebook/`simpleNFB.__init__` imports working by adapting each new
+process(...) signature back to its original call shape.
 
-Functions:
-    rebin_intensity_nm_to_ev  -- rebin spectral intensity from wavelength to energy axis
-    smooth_data               -- Savitzky-Golay smoothing
-    group_average             -- batched median-filtered group averaging
-    relative_position         -- tip position relative to scan frame (with angle correction)
-    remove_line_average       -- line-by-line linear leveling of 2D image data
+`relative_position` is NOT part of the pipeline (no KIND fits it) and stays
+here as the only real implementation.
+
+Functions (all delegate to simpleNFB.processes.<stem> except relative_position):
+    rebin_intensity_nm_to_ev  -- processes.rebin_nm_to_ev
+    smooth_data               -- processes.smooth_savgol
+    group_average             -- processes.group_average (arg order adapted)
+    relative_position         -- unchanged, pure, lives here
+    remove_line_average       -- processes.remove_line_average
+    despike_z_score           -- processes.despike_z_score
+    moving_average            -- processes.moving_average
 '''
 
 import numpy as np
-from scipy.signal import savgol_filter, medfilt
+
+from .processes.rebin_nm_to_ev import process as _rebin_process
+from .processes.smooth_savgol import process as _smooth_process
+from .processes.group_average import process as _group_average_process
+from .processes.remove_line_average import process as _remove_line_average_process
+from .processes.despike_z_score import process as _despike_process
+from .processes.moving_average import process as _moving_average_process
 
 
 def rebin_intensity_nm_to_ev(wavelengths, intensities):
-    '''Convert spectral data from wavelength (nm) to energy (eV) axis.
-
-    Each intensity bin is divided by the corresponding energy bin width dE so
-    that the result has units of counts/eV (i.e. the Jacobian is applied).
-
-    Parameters
-    ----------
-    wavelengths : array-like, shape (N,)
-        Wavelength values in nm.
-    intensities : array-like, shape (N,)
-        Intensity values in counts (or any linear unit).
-
-    Returns
-    -------
-    center_energies : ndarray, shape (N,)
-        Photon energies in eV corresponding to each wavelength bin centre.
-    rebinned : ndarray, shape (N,)
-        Intensity rescaled by 1/dE (units: counts / eV).
-    '''
-    wavelengths = np.asarray(wavelengths, dtype=float)
-    intensities = np.asarray(intensities, dtype=float)
-
-    center_energies = 1240.0 / wavelengths
-
-    delta_wavelengths = np.abs(np.diff(wavelengths))
-    delta_wavelengths = np.insert(delta_wavelengths, 0, delta_wavelengths[0])
-
-    delta_energies = np.array([
-        1240.0 / (w - dw / 2.0) - 1240.0 / (w + dw / 2.0)
-        for w, dw in zip(wavelengths, delta_wavelengths)
-    ])
-
-    return center_energies, intensities / delta_energies
+    '''Convert spectral data from wavelength (nm) to energy (eV) axis. See
+    simpleNFB.processes.rebin_nm_to_ev for the implementation.'''
+    return _rebin_process(wavelengths, intensities)
 
 
 def smooth_data(data, window, order):
-    '''Apply a Savitzky-Golay filter to 1-D spectral data.
-
-    Parameters
-    ----------
-    data   : array-like, shape (N,)
-    window : int  -- filter window length (must be odd and >= 3)
-    order  : int  -- polynomial order (must be < window)
-
-    Returns
-    -------
-    ndarray, shape (N,)  -- smoothed data
-    '''
-    return savgol_filter(np.asarray(data, dtype=float), window, order)
+    '''Savitzky-Golay smoothing. See simpleNFB.processes.smooth_savgol.'''
+    return _smooth_process(data, window_size=window, order=order)
 
 
 def group_average(data, xx, group_size):
-    '''Batch spectra into groups and return a median-filtered average per group.
-
-    Outliers within each element-wise group are suppressed with a size-3 median
-    filter, and the maximum value is discarded before averaging.
-
-    Parameters
-    ----------
-    data       : list of ndarray  -- spectral y-values, one array per spectrum
-    xx         : list of ndarray  -- corresponding x-values
-    group_size : int              -- number of spectra per group
-
-    Returns
-    -------
-    grouped_x      : list of ndarray  -- one x-array per group (first of each group)
-    group_averaged : list of ndarray  -- averaged y-array per group
-    '''
-    grouped_data = [data[i:i + group_size] for i in range(0, len(data), group_size)]
-    grouped_x = [xx[i] for i in range(0, len(xx), group_size)]
-
-    group_averaged = []
-    for group in grouped_data:
-        median_average = []
-        for element_group in zip(*group):
-            medians = np.sort(medfilt(element_group, 3))
-            medians = medians[:-1]  # drop maximum
-            median_average.append(np.average(medians))
-        group_averaged.append(np.array(median_average))
-
-    return grouped_x, group_averaged
+    '''Batch spectra into groups and return a median-filtered average per
+    group. Old argument order was (ys, xs, n); the process() contract takes
+    (xs, ys, **params) -- adapted here, see simpleNFB.processes.group_average.'''
+    return _group_average_process(xx, data, group_size=group_size)
 
 
 def relative_position(img, spec):
@@ -134,100 +80,17 @@ def relative_position(img, spec):
     return [x_rel, y_rel]
 
 
-def moving_average(data, window_size):
-    '''Uniform (boxcar) moving average via convolution.
-
-    Each output sample is the arithmetic mean of the *window_size* nearest
-    input samples, centred on that sample.  The convolution is run in 'same'
-    mode so the output is the same length as the input; edge samples where the
-    full window does not fit are normalised by the number of samples that
-    actually fall within the array (no zero-padding bias).
-
-    Parameters
-    ----------
-    data        : array-like, shape (N,)
-    window_size : int  -- number of points to average (should be odd for a
-                          symmetric window; even values are accepted)
-
-    Returns
-    -------
-    ndarray, shape (N,)  -- smoothed data
-    '''
-    data = np.asarray(data, dtype=float)
-    window_size = max(1, int(window_size))
-    kernel = np.ones(window_size)
-    # convolve data and a unit array to get per-sample normalisation counts
-    smoothed = np.convolve(data, kernel, mode='same')
-    counts   = np.convolve(np.ones_like(data), kernel, mode='same')
-    return smoothed / counts
+def remove_line_average(image_data):
+    '''Line-by-line linear leveling of 2-D scan data. See
+    simpleNFB.processes.remove_line_average.'''
+    return _remove_line_average_process(image_data)
 
 
 def despike_z_score(data, window_size=10, threshold=3.0):
-    '''Detect and replace spikes using a localised modified Z-score (Iglewicz-Hoaglin).
-
-    For each sample, a symmetric window of neighbouring points is used to
-    estimate the local median and median absolute deviation (MAD). Samples
-    whose modified Z-score exceeds *threshold* are replaced with the local
-    median.  The modified Z-score is:
-
-        MZ = 0.6745 * |x_i - median| / MAD
-
-    The constant 0.6745 makes MZ comparable to a standard Z-score for
-    normally-distributed data (MAD ≈ 0.6745 σ for a Gaussian).
-
-    Parameters
-    ----------
-    data        : array-like, shape (N,)   -- 1-D spectral data
-    window_size : int, default 10          -- half-width of the local window
-                                              (full window = 2 * window_size samples)
-    threshold   : float, default 3.0       -- modified Z-score cutoff above
-                                              which a point is considered a spike
-
-    Returns
-    -------
-    ndarray, shape (N,)  -- despiked copy of the input (original unchanged)
-    '''
-    data = np.asarray(data, dtype=float)
-    despiked = np.copy(data)
-    window_size = int(window_size)
-
-    for i in range(window_size, len(data) - window_size):
-        window = data[i - window_size : i + window_size]
-        median = np.median(window)
-        mad = np.median(np.abs(window - median))
-
-        modified_z = 0.0 if mad == 0 else 0.6745 * abs(data[i] - median) / mad
-
-        if modified_z > threshold:
-            despiked[i] = median  # replace spike with local median
-
-    return despiked
+    '''Modified Z-score spike removal. See simpleNFB.processes.despike_z_score.'''
+    return _despike_process(data, window_size=window_size, threshold=threshold)
 
 
-def remove_line_average(image_data):
-    '''Line-by-line linear leveling of 2-D scan data.
-
-    Fits a first-order polynomial to each row (ignoring NaN rows) and
-    subtracts it, removing tilt and slow drift on a per-line basis.
-
-    Parameters
-    ----------
-    image_data : ndarray, shape (M, N)  -- raw 2-D scan data (may contain NaNs)
-
-    Returns
-    -------
-    ndarray, shape (M, N)  -- leveled data (input is not modified in-place)
-    '''
-    data = image_data.copy()
-    x = np.arange(data.shape[1])
-
-    for i in range(data.shape[0]):
-        if np.isnan(data[i, :]).any():
-            continue
-        try:
-            coef = np.polyfit(x, data[i, :], 1)
-            data[i, :] -= np.polyval(coef, x)
-        except Exception:
-            pass  # leave row unchanged on polyfit failure
-
-    return data
+def moving_average(data, window_size):
+    '''Boxcar moving average. See simpleNFB.processes.moving_average.'''
+    return _moving_average_process(data, window_size=window_size)

@@ -29,5 +29,6 @@
     "color": "#ffffff",
     "font_size": 12
   },
-  "ctx_legend_w": 200
+  "ctx_legend_w": 200,
+  "pipeline": []
 }

@@ -13,11 +13,12 @@ import ipywidgets as widgets
 import matplotlib as mpl
 import numpy as np
 from IPython import display
-from scipy.ndimage import gaussian_filter, gaussian_laplace, median_filter
 
 from spmpy import Spm
 from .base_browser import BaseBrowser
-from .process_utils import relative_position, remove_line_average
+from .pipeline_panel import PipelinePanel
+from .process_utils import relative_position
+from .processes import discover
 from .widget_helpers import HBox, VBox, Btn_Widget, Text_Widget
 
 # All non-reversed colormap names; the reverse toggle appends '_r' at resolve time.
@@ -99,7 +100,13 @@ class fileBrowser(BaseBrowser):
         self.dat_files: list = []
         self.directories = [self.active_dir]
 
+        # Dynamic process pipeline (DYNAMIC_PIPELINE_PLAN.md §2.3-2.4): one
+        # ProcessSpec per file in processes/, discovered fresh at construction.
+        self._specs, _pipeline_warnings = discover()
+
         self._build_widgets(_reversed)
+        for w in _pipeline_warnings:
+            self.updateErrorText(w)
         self._build_layout()
         self._connect_observers()
         self._apply_figure_layout()   # configure appearance after widgets exist
@@ -124,28 +131,19 @@ class fileBrowser(BaseBrowser):
                                         tooltip='This text is appended to filename when the figure is saved',
                                         layout=FL(99))
 
-        # image controls
-        self.linebylineBtn = widgets.ToggleButton(
-            description='', value=False, layout=L(40), icon='align-justify',
-            tooltip='Line by line linear subtraction')
+        # image controls — view/sign controls only; the six former filter
+        # toggles (line-by-line, invert, fix-zero, gaussian, median, laplace)
+        # are now 'invert'/'fix_zero_2d'/'remove_line_average'/etc. pipeline
+        # processes (see pipelinePanel below). Plane-fit (flattenBtn) is a
+        # spmpy read-time option, not a post-hoc image transform, so it stays
+        # a dedicated widget (not a pipeline candidate, see DYNAMIC_PIPELINE_
+        # PLAN.md §2.2 migration set).
         self.flattenBtn   = widgets.ToggleButton(
             description='', value=False, layout=L(40), icon='square-o',
             tooltip='Apply plane fit and subtraction')
-        self.edgesBtn     = widgets.ToggleButton(
-            description='', value=False, layout=L(40), icon='dot-circle-o',
-            tooltip='Apply laplace filter (edge detection)')
-        self.gaussianBtn  = widgets.ToggleButton(
-            description='', value=False, layout=L(40), icon='bullseye',
-            tooltip='Apply a 3x3 Gaussian filter')
-        self.invertBtn    = widgets.ToggleButton(
-            description='', value=False, layout=L(40), icon='exchange',
-            tooltip='Invert sign of the image data')
         self.directionBtn = widgets.ToggleButton(
             description='', value=False, layout=L(40), icon='caret-square-o-right',
             tooltip='Select scan direction, default is forward')
-        self.fixZeroBtn   = widgets.ToggleButton(
-            description='', value=False, layout=L(40), icon='neuter',
-            tooltip='Rescale image data so minimum value is zero')
 
         # outputs
         self.saveBtn = widgets.ToggleButton(
@@ -240,24 +238,18 @@ class fileBrowser(BaseBrowser):
             description='size:', value=9,
             style={'description_width': '40px'}, layout=FL(98))
 
-        self.filterLabel    = widgets.Label(value='Image Filter Settings', layout=FL(98))
-        self.gaussianToggle = widgets.ToggleButton(value=False, description='Gaussian', layout=FL(60))
-        self.gaussianSize   = widgets.BoundedIntText(
-            value=2, min=0, max=10, step=1, tooltip='Gaussian kernel size', layout=FL(40))
-        self.medianToggle   = widgets.ToggleButton(value=False, description='Median',   layout=FL(60))
-        self.medianSize     = widgets.BoundedIntText(
-            value=3, min=1, max=20, step=1, tooltip='Median kernel size',   layout=FL(40))
-        self.laplacToggle   = widgets.ToggleButton(value=False, description='Laplace',  layout=FL(60))
-        self.laplaceSize    = widgets.BoundedIntText(
-            value=1, min=1, max=10, step=1, tooltip='Laplace kernel size',  layout=FL(40))
+        # filter settings — dynamic, reorderable pipeline (replaces the fixed
+        # toggle chain; see DYNAMIC_PIPELINE_PLAN.md §2.4). SXM accepts only
+        # '2d' processes.
+        self.pipelinePanel = PipelinePanel(self._specs, kinds={'2d'},
+                                           on_change=self._schedule_redraw_dirty)
         self._build_figure_settings_widgets(self._fig_width, self._fig_height)
 
     def _build_layout(self) -> None:
         """Assemble widgets into HBox/VBox containers."""
         _, FL, FLB, FLH = self._layout_helpers()
 
-        self.h_process_btn_layout = HBox(children=[
-            self.directionBtn, self.invertBtn])
+        self.h_process_btn_layout = HBox(children=[self.directionBtn])
         self.h_channel_layout = HBox(children=[
             widgets.Label('Channel'), self.channelSelect])
         self.v_color_layout = VBox(children=[
@@ -297,16 +289,10 @@ class fileBrowser(BaseBrowser):
             ], layout=FLH(98)),
             VBox(children=[
                 widgets.Label('── Corrections ──', layout=FL(98)),
-                HBox(children=[self.linebylineBtn,
-                               widgets.Label('Line-by-line subtraction')], layout=FL(98)),
                 HBox(children=[self.flattenBtn,
-                               widgets.Label('Plane fit')],               layout=FL(98)),
-                HBox(children=[self.fixZeroBtn,
-                               widgets.Label('Set zero')],                layout=FL(98)),
-                widgets.Label('── Filters ──', layout=FL(98)),
-                HBox(children=[self.gaussianToggle, self.gaussianSize],   layout=FL(98)),
-                HBox(children=[self.medianToggle,   self.medianSize],     layout=FL(98)),
-                HBox(children=[self.laplacToggle,   self.laplaceSize],    layout=FL(98)),
+                               widgets.Label('Plane fit (spmpy read-time)')], layout=FL(98)),
+                widgets.Label('── Pipeline ──', layout=FL(98)),
+                self.pipelinePanel.container,
             ], layout=FL(98)),
             VBox(children=[
                 widgets.Label('Header key', layout=FL(98)),
@@ -316,8 +302,8 @@ class fileBrowser(BaseBrowser):
             ], layout=FLH(98)),
             self._figure_settings_tab(),
         ], layout=FLH(98),
-        titles=['Label Settings', 'Title Settings', 'Filter Settings',
-                'Header', 'Figure Settings'])
+        titles=['Label Settings', 'Title Settings', 'Data Processing',
+                'File Header', 'Figure Settings'])
         # The ipympl Canvas is itself a widget — embed it directly.
         # align_items='center' centres the fixed-px figure horizontally;
         # justify_content='center' centres it vertically in the tall column.
@@ -349,12 +335,9 @@ class fileBrowser(BaseBrowser):
             w.observe(self._refresh_info, names='value')
 
         # Tier 3 — full pipeline (filter/channel processing); debounced (I1)
-        for w in (self.gaussianToggle, self.gaussianSize,
-                  self.medianToggle,   self.medianSize,
-                  self.laplacToggle,   self.laplaceSize,
-                  self.linebylineBtn, self.flattenBtn,
-                  self.invertBtn, self.fixZeroBtn):
-            w.observe(self._schedule_redraw_dirty, names='value')
+        self.flattenBtn.observe(self._schedule_redraw_dirty, names='value')
+        # pipelinePanel's on_change (passed at construction) already fires
+        # _schedule_redraw_dirty on every add/remove/reorder/param edit.
 
         # Square size budget: keep W = H so _compute_fig_size yields a square
         # plot for square scans (non-square scans still fit by aspect ratio).
@@ -499,6 +482,18 @@ class fileBrowser(BaseBrowser):
             self._scan_cache[key] = val if val is not None else default
         return self._scan_cache[key]
 
+    def _apply_pipeline(self, img: np.ndarray) -> np.ndarray:
+        """Executor for the dynamic 2D pipeline (DYNAMIC_PIPELINE_PLAN.md §2.5):
+        run enabled '2d' steps over img in panel order (replaces the fixed
+        invert → line-avg → fix-zero → gaussian → median → laplace chain)."""
+        out = np.asarray(img).copy()
+        for entry in self.pipelinePanel.to_list():
+            if not entry['enabled']:
+                continue
+            spec = self._specs[entry['process']]
+            out = spec.call(out, **entry['params'])
+        return out
+
     def update_image_data(self) -> None:
         """Process channel data from widget state and update image_data."""
         if self.img is None:
@@ -516,18 +511,7 @@ class fileBrowser(BaseBrowser):
         if direction == 'backward':
             self.image_data = np.flip(self.image_data, axis=1)
         self.image_info['unit'] = unit
-        if self.invertBtn.value:
-            self.image_data *= -1
-        if self.linebylineBtn.value:
-            self.image_data = remove_line_average(self.image_data)
-        if self.fixZeroBtn.value:
-            self.image_data -= np.nanmin(self.image_data)
-        if self.gaussianToggle.value:
-            self.image_data = gaussian_filter(self.image_data, self.gaussianSize.value)
-        if self.medianToggle.value:
-            self.image_data = median_filter(self.image_data, size=self.medianSize.value)
-        if self.laplacToggle.value:
-            self.image_data = -gaussian_laplace(self.image_data, self.laplaceSize.value)
+        self.image_data = self._apply_pipeline(self.image_data)
         # update limit widgets without triggering a redundant redraw
         self._updating_limits = True
         self.vmin.value = round(float(np.nanmin(self.image_data)), 3)
@@ -765,9 +749,11 @@ class fileBrowser(BaseBrowser):
             'feedback': str(self.scan_dict.get('feedback', 'N/A')),
             'date':     str(self.scan_dict.get('date', 'N/A')),
             'filename': str(self.scan_dict.get('filename', 'N/A')),
-            'filters':  '+'.join(k for k, t in [('G', self.gaussianToggle),
-                                                  ('M', self.medianToggle),
-                                                  ('LP', self.laplacToggle)] if t.value),
+            # Behavior change: shows every enabled pipeline step's own NAME
+            # (panel order) instead of fixed G/M/LP abbreviations — the
+            # pipeline can hold any 2d process combination now.
+            'filters':  '+'.join(self._specs[e['process']].name
+                                  for e in self.pipelinePanel.to_list() if e['enabled']),
         }
         iw = self.image_info['width']
 
@@ -874,24 +860,26 @@ class fileBrowser(BaseBrowser):
             cmap_name += '_r'
         vmin_val = self.vmin.value
         vmax_val = self.vmax.value
-        lines = [
-            "import numpy as np",
-            "from spmpy import Spm",
-            "from simpleNFB.process_utils import remove_line_average",
+
+        pipeline   = [e for e in self.pipelinePanel.to_list() if e['enabled']]
+        stems_used = sorted({e['process'] for e in pipeline})
+
+        lines = ["import numpy as np", "from spmpy import Spm"]
+        for stem in stems_used:
+            lines.append(f"from simpleNFB.processes.{stem} import process as {stem}_process")
+        lines += [
             "",
             f"img = Spm({fname!r})",
             f"data, _ = img.get_channel({channel!r}, direction={direction!r})",
             "",
-            "# Apply corrections (match browser state)",
         ]
-        if self.linebylineBtn.value:
-            lines.append("data = remove_line_average(data)")
         if self.flattenBtn.value:
             lines.append("# plane-fit subtraction (apply np.polyfit per row/col as needed)")
-        if self.invertBtn.value:
-            lines.append("data = -data")
-        if self.fixZeroBtn.value:
-            lines.append("data = data - np.nanmin(data)")
+        # Pipeline steps (panel order); imports generated above from
+        # ProcessSpec.emit_code, never hand-written per process.
+        for entry in pipeline:
+            spec = self._specs[entry['process']]
+            lines.append(spec.emit_code(entry['params']).replace('img', 'data'))
         lines += [
             "",
             "# Crop incomplete scan rows",
@@ -1164,7 +1152,7 @@ class fileBrowser(BaseBrowser):
         return [self.figCtxLegendW]
 
     def _template_extra_save(self) -> dict:
-        """Capture SXM label settings and context legend width with the template."""
+        """Capture SXM label settings, context legend width, and the pipeline."""
         return {
             'labels': {
                 'show':        self.labelToggle.value,
@@ -1176,10 +1164,16 @@ class fileBrowser(BaseBrowser):
                 'font_size':   self.labelFontSize.value,
             },
             'ctx_legend_w': self._CTX_LEGEND_W,
+            'pipeline': self.pipelinePanel.to_list(),
         }
 
     def _template_extra_apply(self, entry: dict) -> None:
-        """Restore SXM label settings and context legend width from a template."""
+        """Restore SXM label settings, context legend width, and the pipeline
+        from a template. A missing 'pipeline' key (pre-pipeline template) is
+        treated as an empty pipeline."""
+        self.pipelinePanel.from_list(entry.get('pipeline', []))
+        for w in self.pipelinePanel.warnings:
+            self.updateErrorText(w)
         labels = entry.get('labels')
         if labels:
             self._loading = True

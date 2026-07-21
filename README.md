@@ -119,11 +119,24 @@ A **copy figure** button places the current plot on the clipboard as a PNG. A
 save toggle (on by default) simultaneously writes the figure to a
 `browser_outputs/` folder, with an optional note appended to the filename.
 
+### Process pipeline
+Both browsers expose a **reorderable process pipeline** in the Filter Settings
+tab instead of fixed filter toggles: pick a process from the dropdown, click
+Add, and reorder/duplicate/disable rows freely — each row keeps its own
+parameters. DAT accepts per-trace (`1d`/`xy`) and whole-selection (`batch`,
+e.g. Group Average) processes; SXM accepts `2d` image processes. Order
+matters (e.g. despike-then-smooth differs from smooth-then-despike); a
+process may be added more than once. Dropping a new file into
+`simpleNFB/processes/` (see that package's docstring for the contract) makes
+it show up in both dropdowns with no other code changes.
+
 ### File data processing functions
-The numerical routines behind the browsers are available as standalone,
-widget-free imports from `simpleNFB.process_utils` — including Savitzky-Golay and boxcar
-smoothing, modified Z-score despiking, group averaging, line-by-line leveling,
-nm→eV spectral rebinning, and tip-position resolution:
+The numerical routines behind the pipeline are available as standalone,
+widget-free imports from `simpleNFB.process_utils` (back-compat shim) or
+directly from their `simpleNFB.processes.<name>` module — including
+Savitzky-Golay and boxcar smoothing, modified Z-score despiking, group
+averaging, line-by-line leveling, nm→eV spectral rebinning, and
+tip-position resolution:
 
 ```python
 from simpleNFB.process_utils import smooth_data, despike_z_score, remove_line_average

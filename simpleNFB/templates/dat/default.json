@@ -21,5 +21,6 @@
     "save_format": "svg"
   },
   "cdn_legend_w": 0.15,
-  "cdn_legend_loc": "Right"
+  "cdn_legend_loc": "Right",
+  "pipeline": []
 }
